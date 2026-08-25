@@ -165,13 +165,17 @@ The application relies on these environment variables:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | Database connection string (e.g. `file:./dev.db` or PostgreSQL URL) |
+| `DATABASE_URL` | Yes | Database connection string (e.g. `file:./dev.db` for local SQLite, or PostgreSQL URL) |
 | `NEXTAUTH_URL` | Yes | Usually `http://localhost:3000` locally. |
-| `NEXTAUTH_SECRET` | Yes | Random string used for hashing tokens. |
-| `GITHUB_CLIENT_ID` | Optional | GitHub OAuth ID (Need if supporting GitHub Sign-In/Sync). |
+| `NEXTAUTH_SECRET` | Yes | Random string used for hashing sessions/tokens. |
+| `GITHUB_CLIENT_ID` | Optional | GitHub OAuth ID (Required for GitHub Sign-In/Sync). |
 | `GITHUB_CLIENT_SECRET`| Optional| GitHub OAuth Secret. |
-| `TOKEN_ENCRYPTION_KEY`| Optional| 32-byte string for encrypting user tokens resting in DB. |
-| `AI_PROVIDER_API_KEY` | Optional | Key for Claude/Anthropic (Extraction pipelines fail gracefully without it). |
+| `TOKEN_ENCRYPTION_KEY`| Optional| 32-byte string for encrypting user tokens (e.g., GitHub access tokens) resting in DB. |
+| `AI_PROVIDER_API_KEY` | Optional | Key for Anthropic SDK (`claudeAdapter.ts`). Extraction pipelines fail gracefully without it. |
+| `AI_PROVIDER_BASE_URL` | Unused | Stubbed in `.env.example`, currently unused by Claude Adapter. |
+| `FILE_STORAGE_BUCKET_URL` | Unused | Stubbed in `.env.example`. PDFs are parsed in-memory automatically using `pdf-parse`. |
+| `SENTRY_DSN` | Unused | Stubbed in `.env.example` for future integrations. |
+| `SENTRY_AUTH_TOKEN` | Unused | Stubbed in `.env.example` for future integrations. |
 
 > ⚠️ Never commit `.env.local` to version control.
 
@@ -212,9 +216,9 @@ No build can legitimately succeed without passing type validations:
   npm run lint
   ```
 
-## Deployment
+## Deployment Considerations
 
-SkillGap is structurally built for stateless edge compatibility across standard PaaS providers, specifically **Vercel** or **Heroku**:
+SkillGap is structurally built for stateless deployment across standard PaaS providers, specifically **Vercel** or **Heroku**:
 
 1. Setup the respective environment variables securely in your deployment dashboard via `Settings -> Variables`.
 2. Ensure you have deployed a persistent database (e.g., Supabase Postgres, Neon, or Railway) and set `DATABASE_URL`.
