@@ -95,16 +95,20 @@ export default function TargetDetailPage() {
     const [scores, setScores] = useState<Scores | null>(null)
     const [roadmap, setRoadmap] = useState<Roadmap | null>(null)
     const [loading, setLoading] = useState(true)
-    const [tab, setTab] = useState<'gaps' | 'scores' | 'roadmap'>('gaps')
+    const [tab, setTab] = useState<'gaps' | 'scores' | 'roadmap' | 'projects'>('gaps')
     const [generating, setGenerating] = useState(false)
+
+    const [nextAction, setNextAction] = useState<any>(null)
+    const [projectIdeas, setProjectIdeas] = useState<any[]>([])
 
     const fetchAll = useCallback(async () => {
         try {
-            const [targetRes, gapsRes, scoresRes, roadmapRes] = await Promise.all([
+            const [targetRes, gapsRes, scoresRes, roadmapRes, actionRes] = await Promise.all([
                 fetch(`/api/targets/${targetId}`),
                 fetch(`/api/targets/${targetId}/gaps`),
                 fetch(`/api/targets/${targetId}/scores`),
                 fetch(`/api/targets/${targetId}/roadmap`),
+                fetch(`/api/targets/${targetId}/next-best-action`),
             ])
 
             if (targetRes.ok) {
@@ -123,6 +127,10 @@ export default function TargetDetailPage() {
                 const d = await roadmapRes.json()
                 setRoadmap(d.roadmap)
             }
+            if (actionRes.ok) {
+                const d = await actionRes.json()
+                setNextAction(d.action)
+            }
         } catch { /* ignore */ } finally {
             setLoading(false)
         }
@@ -138,6 +146,20 @@ export default function TargetDetailPage() {
                 const d = await res.json()
                 setRoadmap(d.roadmap)
                 setTab('roadmap')
+                fetchAll()
+            }
+        } catch { /* ignore */ } finally {
+            setGenerating(false)
+        }
+    }
+
+    const generateProjects = async () => {
+        setGenerating(true)
+        try {
+            const res = await fetch(`/api/targets/${targetId}/projects`, { method: 'POST' })
+            if (res.ok) {
+                const d = await res.json()
+                setProjectIdeas(d.projects)
             }
         } catch { /* ignore */ } finally {
             setGenerating(false)
@@ -208,6 +230,23 @@ export default function TargetDetailPage() {
                 </div>
             </div>
 
+            {/* Next Best Action Banner */}
+            {nextAction && (
+                <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: 'var(--radius-md)', marginBottom: '24px', borderLeft: '4px solid var(--accent-primary)' }}>
+                    <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--accent-primary)', marginBottom: '8px', textTransform: 'uppercase' }}>Next Best Action</h3>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                <span style={{ fontWeight: 600, fontSize: '16px' }}>{nextAction.task}</span>
+                                <span className="badge badge-primary">{nextAction.skillName}</span>
+                            </div>
+                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>💡 {nextAction.whyItMatters}</p>
+                        </div>
+                        <button className="btn btn-primary btn-sm" onClick={() => setTab('roadmap')}>View Roadmap</button>
+                    </div>
+                </div>
+            )}
+
             {/* Tabs */}
             <div className="tabs">
                 <button className={`tab ${tab === 'gaps' ? 'active' : ''}`} onClick={() => setTab('gaps')}>
@@ -218,6 +257,9 @@ export default function TargetDetailPage() {
                 </button>
                 <button className={`tab ${tab === 'roadmap' ? 'active' : ''}`} onClick={() => setTab('roadmap')}>
                     Roadmap {roadmap ? `(${roadmap.roadmapItems.length})` : ''}
+                </button>
+                <button className={`tab ${tab === 'projects' ? 'active' : ''}`} onClick={() => setTab('projects')}>
+                    Projects
                 </button>
             </div>
 
@@ -337,6 +379,47 @@ export default function TargetDetailPage() {
                                                     <option key={value} value={value}>{label}</option>
                                                 ))}
                                             </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Projects Tab */}
+            {tab === 'projects' && (
+                <div>
+                    {!projectIdeas || projectIdeas.length === 0 ? (
+                        <div className="card">
+                            <div className="empty-state">
+                                <div style={{ fontSize: '48px', marginBottom: '16px' }}>💡</div>
+                                <h3 className="empty-state-title">No Projects Generated</h3>
+                                <p className="empty-state-text">Generate comprehensive multi-skill projects tailored to cover your core gaps.</p>
+                                <button className="btn btn-primary" onClick={generateProjects} disabled={generating}>
+                                    {generating ? <span className="spinner" /> : 'Generate Projects'}
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div style={{ display: 'grid', gap: '12px' }}>
+                            {projectIdeas.map((proj, i) => (
+                                <div key={i} className="card" style={{ padding: '16px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                                <h4 style={{ fontSize: '16px', fontWeight: 600 }}>{proj.title}</h4>
+                                                <span className="badge badge-info">{proj.difficulty}</span>
+                                            </div>
+                                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                                                {proj.description}
+                                            </p>
+                                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                {proj.skillsCovered.map((s: string) => (
+                                                    <span key={s} className="badge badge-primary">{s}</span>
+                                                ))}
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
