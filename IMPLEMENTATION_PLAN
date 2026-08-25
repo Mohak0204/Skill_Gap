@@ -1,0 +1,858 @@
+# IMPLEMENTATION_PLAN.md — SkillGap Implementation Roadmap
+
+This plan is derived strictly from `PRD.md` and `ARCHITECTURE.md` and is written to be executable by an AI coding agent (or a small student team) working through the repository sequentially. It assumes the Next.js modular-monolith stack, Prisma schema, and layered `route → service → repository` pattern defined in `ARCHITECTURE.md`.
+
+---
+
+> **Implementation scope guard:** Build only features marked **P0 / MVP** as mandatory. P1 features may be implemented only after all P0 acceptance criteria pass. P2/P3 and explicitly post-MVP/future features must not be implemented as part of the MVP unless this plan is deliberately re-scoped. Internal data needed to support future features may exist, but user-facing behavior and implementation work should remain within the stated priority boundary.
+
+
+## 1. Development Strategy
+
+**Order of implementation: foundation-first, then vertical feature slices, then hardening.**
+
+1. **Foundation first (Phases 0–2):** project scaffolding, the full Prisma schema (all entities up front, even ones only used in later phases), and the shared backend skeleton (layered structure, error mapping, Zod validation conventions, the `AIProvider` interface, the background job runner). Building the schema once — instead of growing it phase by phase — avoids repeated destructive migrations and lets every later phase write against a stable data model.
+2. **Vertical feature slices (Phases 3–8):** each phase after the foundation delivers one feature **end-to-end** — database access → service logic → API routes → UI — rather than "all backend, then all frontend." This matches how the PRD's user flows are structured (Flow A/B/C) and means the project is demoable after every phase, which matters for a hackathon/student timeline where the project may need to be shown at any checkpoint.
+3. **Hardening last (Phases 9–10):** cross-cutting testing, error-state polish, rate limiting, and deployment are consolidated at the end because they depend on every feature already existing, and because doing them once at the end avoids re-testing the same flow repeatedly as it changes.
+
+**Why not pure horizontal (all backend, then all frontend)?** The reference architecture's own principle — deterministic, unit-testable business logic in the service layer, AI only for extraction/generation — is easiest to verify when each service ships with the minimal UI needed to exercise it manually, rather than accumulating five backend services with no way to click through them until the very end.
+
+**Why database schema is front-loaded rather than grown per phase:** every phase from Phase 3 onward reads or writes entities owned by other phases (e.g., the Roadmap Engine in Phase 8 reads `Evidence` from Phase 6 and `GitHubRepository` from Phase 7). Defining the full schema in Phase 1 — informed by the ER diagram in `ARCHITECTURE.md` §7 — means later phases only ever run additive migrations (new columns/indexes), never structural ones.
+
+---
+
+## 2. Development Phases
+
+| Phase | Name | Delivers |
+|---|---|---|
+| 0 | Project Setup | Repo, tooling, CI skeleton, empty deployable app |
+| 1 | Database & Core Entities | Full Prisma schema, migrations, seed data |
+| 2 | Backend Foundation | Layered architecture skeleton, error handling, AI provider adapter, job runner |
+| 3 | Authentication | Sign-up/login, sessions, GitHub OAuth linking |
+| 4 | Target Job Management & JD Analysis | Create target, AI job-description extraction, requirement review UI |
+| 5 | Resume Upload & Extraction | PDF upload, AI resume extraction, confirmation UI |
+| 6 | Skill Gap Engine & Evidence Engine | Per-skill status computation, evidence aggregation, evidence UI |
+| 7 | GitHub Integration & Sync | OAuth repo import, detection heuristics, evidence updates |
+| 8 | Roadmap, Project Generator & Scoring | Roadmap items, project recommendations, readiness scores, Next Best Action |
+| 9 | Dashboard Integration & Testing | Full dashboard, cross-feature wiring, automated test suite |
+| 10 | Deployment & Polish | Rate limiting, error-state polish, staging/production deploy, demo data |
+
+```mermaid
+flowchart TD
+    P0[Phase 0: Setup] --> P1[Phase 1: Database]
+    P1 --> P2[Phase 2: Backend Foundation]
+    P2 --> P3[Phase 3: Authentication]
+    P3 --> P4[Phase 4: Target + JD Analysis]
+    P4 --> P5[Phase 5: Resume Upload]
+    P4 --> P6[Phase 6: Skill Gap + Evidence Engine]
+    P5 --> P6
+    P3 --> P7[Phase 7: GitHub Integration]
+    P6 --> P8[Phase 8: Roadmap + Scoring]
+    P7 --> P8
+    P8 --> P9[Phase 9: Dashboard + Testing]
+    P9 --> P10[Phase 10: Deployment + Polish]
+```
+
+---
+
+## 3. Detailed Tasks
+
+### Phase 0 — Project Setup
+
+#### Objectives
+Stand up an empty, deployable Next.js application with all tooling in place, so every subsequent phase starts from a working baseline.
+
+#### Prerequisites
+None.
+
+#### Tasks
+
+1. **Initialize the Next.js (App Router) + TypeScript project.**
+   - *Files/modules:* `package.json`, `tsconfig.json`, `next.config.js`, `src/app/layout.tsx`, `src/app/page.tsx`
+   - *Dependencies:* None
+   - *Expected result:* `npm run dev` serves a placeholder home page.
+   - *Validation:* App boots locally with no console errors.
+
+2. **Install and configure Tailwind CSS + shadcn/ui.**
+   - *Files/modules:* `tailwind.config.ts`, `src/styles/globals.css`, `src/components/ui/` (shadcn primitives: button, input, card, dialog, toast)
+   - *Dependencies:* Task 1
+   - *Expected result:* A shadcn `Button` renders correctly styled on the placeholder page.
+   - *Validation:* Visual check; `npx shadcn-ui@latest add button` completes without error.
+
+3. **Set up Prisma with a Postgres connection (Neon/Supabase free tier).**
+   - *Files/modules:* `prisma/schema.prisma` (empty datasource block), `src/lib/db.ts` (Prisma client singleton), `.env.example`
+   - *Dependencies:* Task 1
+   - *Expected result:* `npx prisma db push` succeeds against an empty dev database.
+   - *Validation:* `npx prisma studio` opens and shows an empty schema.
+
+4. **Configure linting, formatting, and commit hooks.**
+   - *Files/modules:* `.eslintrc.json`, `.prettierrc`, `package.json` (lint-staged/husky config)
+   - *Dependencies:* Task 1
+   - *Expected result:* `npm run lint` passes on the placeholder app; pre-commit hook runs lint + format.
+   - *Validation:* Intentionally malformed file is rejected by the commit hook.
+
+5. **Set up Vitest (unit) and Playwright (E2E) scaffolding.**
+   - *Files/modules:* `vitest.config.ts`, `tests/unit/`, `playwright.config.ts`, `tests/e2e/`
+   - *Dependencies:* Task 1
+   - *Expected result:* A trivial passing unit test and a trivial passing Playwright test (loads home page, checks title) both run.
+   - *Validation:* `npm run test:unit` and `npm run test:e2e` both exit 0.
+
+6. **Connect the repository to Vercel with preview deployments.**
+   - *Files/modules:* Vercel project config (no repo files beyond `.vercelignore` if needed)
+   - *Dependencies:* Tasks 1–3
+   - *Expected result:* Every PR gets an automatic preview deployment; `main` deploys to production.
+   - *Validation:* Open a test PR and confirm a preview URL is generated and loads.
+
+7. **Set up error tracking (Sentry free tier or equivalent) for frontend and backend.**
+   - *Files/modules:* `src/lib/sentry.ts` (or SDK init in `next.config.js`), `.env.example` (`SENTRY_DSN`)
+   - *Dependencies:* Task 1
+   - *Expected result:* A manually thrown test error appears in the Sentry dashboard.
+   - *Validation:* Trigger a test error route, confirm it appears in Sentry within a few minutes.
+
+#### Definition of Done
+- [ ] App builds and deploys to a Vercel preview URL with zero errors.
+- [ ] Lint, unit test, and E2E test commands all run successfully (even on trivial placeholder tests).
+- [ ] `.env.example` lists all known environment variables from Architecture §2/§12 (populated further in later phases).
+- [ ] Error tracking captures a test exception end-to-end.
+
+---
+
+### Phase 1 — Database & Core Entities
+
+#### Objectives
+Define the complete Prisma schema for all 12 domain entities plus the background-job table, matching `ARCHITECTURE.md` §7 exactly, and seed canonical reference data (the `Skill` table).
+
+#### Prerequisites
+Phase 0 complete (Prisma connected to a dev database).
+
+#### Tasks
+
+1. **Author the full Prisma schema from the ER diagram (Architecture §7).**
+   - *Files/modules:* `prisma/schema.prisma` — models: `User`, `Target`, `JobRequirement`, `Skill`, `UserSkill`, `Evidence`, `Project`, `ProjectSkill`, `Roadmap`, `RoadmapItem`, `GitHubRepository`, `Assessment`
+   - *Dependencies:* Phase 0 Task 3
+   - *Expected result:* Schema compiles; includes all fields listed in the ER diagram plus `createdAt`/`updatedAt` timestamps on every model.
+   - *Validation:* `npx prisma validate` passes.
+
+2. **Add indexes and constraints per Architecture §7.**
+   - *Files/modules:* `prisma/schema.prisma`
+   - *Dependencies:* Task 1
+   - *Expected result:* `Skill.name` unique; `UserSkill(userId, skillId)` unique composite; `JobRequirement(targetId, skillId)` unique composite; `GitHubRepository(userId, githubId)` unique composite; indexes on `Evidence.sourceType`, `Skill.category`, `RoadmapItem.status`, `GitHubRepository.lastSyncedAt`.
+   - *Validation:* Inserting a duplicate `UserSkill` for the same `(userId, skillId)` fails as expected in a quick manual test via Prisma Studio.
+
+3. **Add cascade-delete rules and soft-delete fields per PRD §13 and Architecture §7.**
+   - *Files/modules:* `prisma/schema.prisma` — `onDelete: Cascade` from `User`; `deletedAt` (nullable) on `Target` for the 30-day soft-delete/recovery window described in PRD §13.
+   - *Dependencies:* Task 1
+   - *Expected result:* Deleting a `User` row cascades all owned records; a soft-deleted `Target` is excluded from normal queries via a `deletedAt: null` filter convention.
+   - *Validation:* Manual delete test in a scratch dev database confirms cascade behavior.
+
+4. **Add the `BackgroundJob` table (infra entity, not in the PRD's domain entity list, required by Architecture §2/§11's DB-backed job queue pattern).**
+   - *Files/modules:* `prisma/schema.prisma` — `BackgroundJob { id, userId, type, status, payload(json), result(json?), error(text?), startedAt, completedAt }`
+   - *Dependencies:* Task 1
+   - *Expected result:* Table exists for polling via `GET /api/jobs/:jobId` (Architecture §8).
+   - *Validation:* `npx prisma validate` passes; manual insert/read round-trip via Prisma Studio.
+
+5. **Run the initial migration.**
+   - *Files/modules:* `prisma/migrations/0001_init/`
+   - *Dependencies:* Tasks 1–4
+   - *Expected result:* `npx prisma migrate dev --name init` succeeds against the dev database.
+   - *Validation:* `npx prisma studio` shows all 13 tables (12 domain entities + `BackgroundJob`) with correct columns.
+
+6. **Seed the canonical `Skill` reference table.**
+   - *Files/modules:* `prisma/seed.ts` — ~150–250 common skills (languages, frameworks, databases, cloud/DevOps tools, testing tools, architecture concepts) grouped by `category`, with common `aliases` (e.g., "JS" → "JavaScript") for the normalization module built in Phase 2.
+   - *Dependencies:* Task 5
+   - *Expected result:* `npx prisma db seed` populates the `Skill` table.
+   - *Validation:* Query for a known alias (e.g., "JS") resolves to the canonical `Skill` row.
+
+7. **Write repository-layer smoke tests for each entity's basic CRUD.**
+   - *Files/modules:* `tests/integration/repositories/*.test.ts`
+   - *Dependencies:* Task 5
+   - *Expected result:* Create/read/update/delete works for `User`, `Target`, `Skill` at minimum (full repository layer isn't built until Phase 2, so these are raw-Prisma smoke tests, not final repository functions).
+   - *Validation:* Tests pass against a disposable test database (separate schema or Postgres test container).
+
+#### Definition of Done
+- [ ] All 12 PRD entities + `BackgroundJob` exist in the schema with fields matching Architecture §7.
+- [ ] All specified unique constraints and indexes are present and verified.
+- [ ] Cascade-delete and soft-delete behavior matches PRD §13.
+- [ ] `Skill` table is seeded with a usable baseline of canonical skills and aliases.
+- [ ] Migration is committed and runs cleanly on a fresh database.
+
+---
+
+### Phase 2 — Backend Foundation
+
+#### Objectives
+Build the shared backend skeleton — the layered `route → service → repository` pattern, validation conventions, error mapping, the `AIProvider` interface, and the background job runner — so every feature phase from Phase 3 onward follows one consistent pattern instead of inventing its own.
+
+#### Prerequisites
+Phase 1 complete (schema + Prisma client available).
+
+#### Tasks
+
+1. **Establish the repository layer pattern with one real repository.**
+   - *Files/modules:* `src/repositories/userRepository.ts`, `src/repositories/skillRepository.ts`
+   - *Dependencies:* Phase 1
+   - *Expected result:* Thin, typed data-access functions (e.g., `userRepository.findById`, `skillRepository.findByAliasOrName`) with no business logic, matching Architecture §6.
+   - *Validation:* Unit tests against a test database confirm each function's basic contract.
+
+2. **Establish the service layer pattern and typed domain errors.**
+   - *Files/modules:* `src/lib/errors.ts` (`NotFoundError`, `ValidationError`, `ExternalServiceError`), `src/services/` (barrel/shared conventions)
+   - *Dependencies:* Task 1
+   - *Expected result:* A documented convention: services throw typed errors; never return raw Prisma objects to controllers.
+   - *Validation:* A trivial service (e.g., `userService.getById`) throws `NotFoundError` correctly in a unit test.
+
+3. **Build the shared API error-mapping middleware.**
+   - *Files/modules:* `src/lib/apiHandler.ts` — wraps route handlers, maps typed domain errors to `{ error: { code, message } }` HTTP responses (400/401/403/404/409/429/502) per Architecture §8/§12.
+   - *Dependencies:* Task 2
+   - *Expected result:* Any route wrapped in `apiHandler` automatically returns the correct status/shape for known error types, and a generic 500 for unknown errors (with Sentry capture, not leaking internals).
+   - *Validation:* Unit test hits a stub route that throws each error type and asserts the resulting status/body.
+
+4. **Set up shared Zod validation conventions.**
+   - *Files/modules:* `src/lib/validation/` (shared primitives: email, password, pagination), pattern for co-locating a route's request/response schema next to its handler
+   - *Dependencies:* Task 3
+   - *Expected result:* A documented, reusable pattern: `const schema = z.object({...}); const body = schema.parse(await req.json());` inside `apiHandler`-wrapped routes, with 400 returned automatically on `ZodError`.
+   - *Validation:* Stub route rejects malformed input with a 400 and a field-level error message.
+
+5. **Build the `AIProvider` interface and a concrete Claude API adapter.**
+   - *Files/modules:* `src/ai/provider.ts` (interface: `extractJobRequirements`, `extractResumeProfile`, `generateRoadmap`, `generateProjectIdeas`, `critiqueResumeClaim`), `src/ai/adapters/claudeAdapter.ts`, `src/ai/schemas/` (Zod schemas per capability)
+   - *Dependencies:* Task 2
+   - *Expected result:* Each interface method calls the Claude API with a versioned prompt template (Architecture §10), validates the response against a Zod schema, and retries once on schema-validation failure before throwing `ExternalServiceError`.
+   - *Validation:* Unit test with a mocked HTTP layer confirms retry-once-then-throw behavior; a manual smoke test against the real API confirms one capability (e.g., `extractJobRequirements`) returns schema-valid JSON for a sample job description.
+
+6. **Build the background job runner and job status polling.**
+   - *Files/modules:* `src/jobs/jobRunner.ts` (enqueue/execute against the `BackgroundJob` table), `src/jobs/handlers/` (empty handler registry for now), `src/app/api/jobs/[jobId]/route.ts`
+   - *Dependencies:* Phase 1 Task 4, Task 3
+   - *Expected result:* `jobRunner.enqueue(type, payload, userId)` creates a `BackgroundJob` row and (for MVP) executes it inline within the same serverless invocation or via a scheduled poll, updating `status`/`result`/`error`; `GET /api/jobs/:jobId` returns current status.
+   - *Validation:* Integration test enqueues a trivial no-op job handler and polls until `status = "complete"`.
+
+7. **Build the skill normalization module.**
+   - *Files/modules:* `src/lib/skillNormalization.ts`
+   - *Dependencies:* Phase 1 Task 6
+   - *Expected result:* Given a raw extracted term (e.g., "JS", "reactjs", "Postgre SQL"), resolves to a canonical `Skill` row via alias/fuzzy match, or creates/flags an "unmapped" entry per PRD §13's edge case for novel skills.
+   - *Validation:* Unit tests cover exact match, alias match, case/whitespace variants, and the unmapped fallback path.
+
+#### Definition of Done
+- [ ] Route → service → repository pattern is documented (README or `CONTRIBUTING.md`) and demonstrated by at least one working vertical slice (e.g., `GET /api/skills`).
+- [ ] Every error type maps to the correct HTTP status/shape.
+- [ ] `AIProvider` interface has a working Claude adapter with schema validation and single-retry behavior.
+- [ ] Background job enqueue → execute → poll cycle works end-to-end for a stub job.
+- [ ] Skill normalization correctly resolves at least the aliases seeded in Phase 1.
+
+---
+
+### Phase 3 — Authentication
+
+#### Objectives
+Deliver PRD §5.1 end-to-end: sign-up, login, session persistence, and GitHub OAuth linking (used both for optional login and as the mandatory link for the Evidence Engine in Phase 7).
+
+#### Prerequisites
+Phase 2 complete (backend foundation, error handling, validation conventions).
+
+#### Tasks
+
+1. **Configure Auth.js with Credentials and GitHub providers.**
+   - *Files/modules:* `src/lib/auth.ts`, `src/app/api/auth/[...nextauth]/route.ts`
+   - *Dependencies:* Phase 2
+   - *Expected result:* Credentials provider hashes passwords with bcrypt on sign-up and verifies on sign-in; GitHub provider configured with `public_repo` read scope by default.
+   - *Validation:* Manual sign-up/sign-in round-trip works locally; session cookie is `HttpOnly`, `Secure`, `SameSite=Lax`.
+
+2. **Build sign-up and sign-in API routes and pages.**
+   - *Files/modules:* `src/app/api/auth/sign-up/route.ts`, `src/app/(auth)/sign-up/page.tsx`, `src/app/(auth)/sign-in/page.tsx`
+   - *Dependencies:* Task 1
+   - *Expected result:* `POST /api/auth/sign-up` per Architecture §8 (`{ email, password, name }` → `{ user }`, 400/409 errors); sign-in uses Auth.js's built-in credentials flow.
+   - *Validation:* E2E test: sign up, get a 409 on duplicate email, sign in with correct/incorrect credentials.
+
+3. **Build session middleware and route protection.**
+   - *Files/modules:* `src/middleware.ts` (or per-route session check helper), protected layout wrapper for authenticated pages
+   - *Dependencies:* Task 1
+   - *Expected result:* Unauthenticated requests to protected pages redirect to `/sign-in`; unauthenticated API calls to protected routes return 401.
+   - *Validation:* E2E test hits `/dashboard` unauthenticated and confirms redirect; integration test hits a protected API route unauthenticated and confirms 401.
+
+4. **Implement GitHub OAuth linking flow (link, not just login).**
+   - *Files/modules:* `src/app/api/auth/github/route.ts`, `src/app/api/auth/github/callback/route.ts`, `src/app/api/auth/github/route.ts` (`DELETE` for disconnect)
+   - *Dependencies:* Task 1
+   - *Expected result:* `GET /api/auth/github` starts OAuth with a validated `state` parameter (CSRF protection per Architecture §12); callback exchanges the code, encrypts the access token at rest (Architecture §9), and links it to the current session's user; `DELETE /api/auth/github` disconnects and stops future syncs (used by Phase 7).
+   - *Validation:* Manual OAuth flow against a real GitHub OAuth app in dev; integration test confirms an invalid/mismatched `state` is rejected with 400.
+
+5. **Encrypt GitHub tokens at rest.**
+   - *Files/modules:* `src/lib/encryption.ts` (application-level encrypt/decrypt using a server-held key from env)
+   - *Dependencies:* Task 4
+   - *Expected result:* `GitHubRepository`-adjacent user token storage (on `User` or a dedicated field) is never stored or logged in plaintext.
+   - *Validation:* Unit test round-trips encrypt/decrypt; manual DB inspection confirms the stored value is ciphertext.
+
+6. **Build the account settings page (GitHub connection status, disconnect, data deletion entry point).**
+   - *Files/modules:* `src/app/settings/page.tsx`
+   - *Dependencies:* Tasks 4–5
+   - *Expected result:* Shows connected GitHub username or a "Connect GitHub" button; disconnect button calls `DELETE /api/auth/github`.
+   - *Validation:* E2E test connects and disconnects GitHub (using a test GitHub OAuth app/account) and confirms UI state updates.
+
+#### Definition of Done
+- [ ] A new user can sign up, sign in, and stay signed in across a page reload.
+- [ ] Protected pages and API routes correctly reject unauthenticated access.
+- [ ] GitHub can be linked and unlinked from `/settings`, with the access token stored encrypted.
+- [ ] OAuth `state` CSRF validation is verified with a negative test.
+
+---
+
+### Phase 4 — Target Job Management & Job Description Analysis
+
+#### Objectives
+Deliver PRD §5.2 and §5.3 end-to-end: create/edit/archive/delete target jobs, run AI extraction on the job description, and let the user review extracted requirements.
+
+#### Prerequisites
+Phase 3 complete (authenticated `userId` available on every request).
+
+#### Tasks
+
+1. **Build Target CRUD service, repository, and routes.**
+   - *Files/modules:* `src/repositories/targetRepository.ts`, `src/services/targetService.ts`, `src/app/api/targets/route.ts` (`POST`/`GET`), `src/app/api/targets/[id]/route.ts` (`GET`/`PATCH`/`DELETE`)
+   - *Dependencies:* Phase 2, Phase 3
+   - *Expected result:* Matches Architecture §8 exactly; job description minimum length (50 chars) enforced per PRD §5.2; `DELETE` soft-deletes (sets `deletedAt`) per PRD §13.
+   - *Validation:* Integration tests cover create/list/get/update/soft-delete, including the 400 on a too-short job description and 403/404 on accessing another user's target.
+
+2. **Implement `extractJobRequirements` prompt and schema.**
+   - *Files/modules:* `src/ai/prompts/extractJobRequirements.ts`, `src/ai/schemas/jobRequirements.ts`
+   - *Dependencies:* Phase 2 Task 5
+   - *Expected result:* Given raw job description text, returns `{ requirements: [{ skill, category, importance, requirementType, seniorityIndicator? }] }`; unrecognized skills are kept as `unmapped` (not dropped) per PRD §5.3.
+   - *Validation:* Unit test against 5–8 fixed sample job descriptions (short backend JD, ambiguous JD, JD with unusual tech) confirms schema-valid output; a too-vague JD test confirms graceful low-confidence output rather than a crash.
+
+3. **Wire job description analysis into the background job pipeline.**
+   - *Files/modules:* `src/jobs/handlers/analyzeTargetHandler.ts`, `src/app/api/targets/[id]/analyze/route.ts`
+   - *Dependencies:* Task 1, Task 2, Phase 2 Task 6
+   - *Expected result:* `POST /api/targets/:id/analyze` enqueues a job that calls `extractJobRequirements`, normalizes each returned skill via `skillNormalization`, and upserts `JobRequirement` rows.
+   - *Validation:* Integration test: create target → trigger analyze → poll job → confirm `JobRequirement` rows exist with correct `skillId` links.
+
+4. **Implement the deterministic fallback for AI failure.**
+   - *Files/modules:* `src/services/targetService.ts` (or a dedicated `jobRequirementFallback.ts`)
+   - *Dependencies:* Task 2
+   - *Expected result:* On repeated AI schema-validation failure (per Architecture §10), falls back to keyword/skill-table matching against the seeded `Skill` table and flags the target as "basic analysis — AI unavailable."
+   - *Validation:* Unit test forces the AI adapter to throw and confirms the fallback path produces at least a partial, non-empty requirement list.
+
+5. **Build the target creation and requirement-review UI.**
+   - *Files/modules:* `src/app/targets/page.tsx` (list/"My Targets"), `src/app/targets/[id]/page.tsx` (detail: requirements list, edit/archive/delete), a target-creation form/modal
+   - *Dependencies:* Tasks 1–3
+   - *Expected result:* Shared Zod schema (Architecture §5) validates the form client-side and server-side; requirement list shows skill, category, importance badge; loading state while analysis job is pending; error state on AI failure with a manual-tagging affordance (PRD §13 edge case).
+   - *Validation:* E2E test: create a target with a real-ish job description, wait for analysis to complete, confirm requirements render.
+
+6. **Build manual skill tagging for the "extraction too vague" edge case.**
+   - *Files/modules:* `src/app/api/targets/[id]/route.ts` (`PATCH` extension or a small dedicated endpoint), UI affordance on the target detail page
+   - *Dependencies:* Task 5
+   - *Expected result:* User can add a `JobRequirement` manually when AI extraction is empty or insufficient.
+   - *Validation:* E2E test with a deliberately short/vague job description confirms the manual-tagging UI appears and a manually added requirement persists.
+
+#### Definition of Done
+- [ ] User can create, edit, archive, and soft-delete a target job.
+- [ ] Pasting a job description triggers AI extraction and produces normalized `JobRequirement` rows within a bounded time, with a visible loading state.
+- [ ] AI failure (simulated) degrades to the deterministic fallback rather than blocking the user.
+- [ ] User can manually add/correct requirements.
+
+---
+
+### Phase 5 — Resume Upload & Extraction
+
+#### Objectives
+Deliver PRD §5.4 end-to-end: PDF upload, AI-based extraction of skills/projects/experience, and a confirmation step before anything is saved as fact.
+
+#### Prerequisites
+Phase 4 complete (background job pipeline and `AIProvider` proven working).
+
+#### Tasks
+
+1. **Implement PDF upload with validation.**
+   - *Files/modules:* `src/app/api/resume/route.ts` (`POST`), `src/lib/fileValidation.ts`
+   - *Dependencies:* Phase 2
+   - *Expected result:* Accepts multipart PDF ≤5 MB; validates MIME type **and** magic bytes (Architecture §12), not just file extension; rejects non-PDF and oversized files with 400/413.
+   - *Validation:* Integration test uploads a valid PDF, an oversized file, and a renamed non-PDF (e.g., `.txt` renamed to `.pdf`) and confirms correct accept/reject behavior.
+
+2. **Implement PDF text extraction and the scanned-image detection edge case.**
+   - *Files/modules:* `src/services/resumeService.ts`, local PDF text-extraction library integration
+   - *Dependencies:* Task 1
+   - *Expected result:* Extracts text layer from the PDF; if extracted text is empty/near-empty, flags the resume as "scanned image, no extractable text" per PRD §13 and offers manual entry instead of proceeding to AI extraction.
+   - *Validation:* Unit test with a text-based sample PDF and an image-only sample PDF confirms the correct path for each.
+
+3. **Store the resume file (DB-stored binary or object storage) with short-lived signed access.**
+   - *Files/modules:* `src/lib/fileStorage.ts`
+   - *Dependencies:* Task 1
+   - *Expected result:* File is stored per Architecture §2's MVP choice (DB-stored binary or Vercel Blob/Supabase Storage); retrieval requires a short-lived signed URL, accessible only to the owner.
+   - *Validation:* Integration test confirms a non-owner request for the file (or an expired signed URL) is rejected.
+
+4. **Implement `extractResumeProfile` prompt and schema.**
+   - *Files/modules:* `src/ai/prompts/extractResumeProfile.ts`, `src/ai/schemas/resumeProfile.ts`
+   - *Dependencies:* Phase 2 Task 5
+   - *Expected result:* Given resume text, returns structured `{ skills: [...], projects: [...], education, certifications, experience, claimedProficiency }` per PRD §5.4's field list.
+   - *Validation:* Unit test against 3–5 fixed sample resumes (standard format, non-traditional background per Persona "Arjun," minimal-experience student resume) confirms schema-valid, plausible output.
+
+5. **Wire resume extraction into the background job pipeline with a pending-review state.**
+   - *Files/modules:* `src/jobs/handlers/extractResumeHandler.ts`, `src/app/api/resume/extracted/route.ts` (`GET`)
+   - *Dependencies:* Task 4, Phase 2 Task 6
+   - *Expected result:* `POST /api/resume` enqueues extraction; results are stored as **pending** (not yet merged into the user's profile); `GET /api/resume/extracted` returns the pending skills/projects for review.
+   - *Validation:* Integration test: upload → poll job → fetch pending extraction → confirm nothing has been written to `UserSkill`/`Project` yet.
+
+6. **Implement the confirmation endpoint that merges reviewed data into the profile.**
+   - *Files/modules:* `src/app/api/resume/confirm/route.ts` (`POST`)
+   - *Dependencies:* Task 5
+   - *Expected result:* `POST /api/resume/confirm` with selected `skillIds`/`projectIds` upserts `UserSkill` (source=`resume`) and `Project` rows, and creates corresponding `Evidence` (source=`resume`) records per PRD §5.6.
+   - *Validation:* Integration test confirms only user-approved items are persisted; rejected/edited items are not.
+
+7. **Build manual skill add/edit (also needed independently of resume upload, per PRD §5.4).**
+   - *Files/modules:* `src/app/api/user-skills/route.ts` (`POST`), `src/app/api/skills/route.ts` (`GET` search)
+   - *Dependencies:* Phase 2 Task 7
+   - *Expected result:* User can search canonical skills and add/edit a `UserSkill` with `source = manual`, which is preserved across future resume re-syncs per PRD §4.
+   - *Validation:* Integration test: add a manual skill, re-run resume extraction, confirm the manual skill's `source` is untouched.
+
+8. **Build the resume upload and confirmation UI.**
+   - *Files/modules:* `src/app/onboarding/page.tsx` (upload step), a reusable `UploadDropzone` component, extraction review screen
+   - *Dependencies:* Tasks 5–7
+   - *Expected result:* Drag-and-drop or file-picker upload; loading state during extraction; review screen lists extracted skills/projects with per-item accept/edit/reject before calling confirm.
+   - *Validation:* E2E test uploads a sample resume PDF, reviews extracted items, confirms a subset, and verifies the profile reflects only the confirmed subset.
+
+#### Definition of Done
+- [ ] Resume PDF upload validates type/size/text-extractability correctly.
+- [ ] AI extraction produces a reviewable, non-final result — nothing is saved as fact without user confirmation.
+- [ ] Manual skill entry works independently and survives future resume re-syncs.
+- [ ] Scanned-image PDFs are detected and routed to manual entry instead of failing silently.
+
+---
+
+### Phase 6 — Skill Gap Engine & Evidence Engine
+
+#### Objectives
+Deliver PRD §5.5 and §5.6 end-to-end: deterministic per-skill status computation and evidence aggregation with a visible 0–5 evidence level.
+
+#### Prerequisites
+Phase 4 (job requirements exist) and Phase 5 (user skills/evidence from resume exist) complete.
+
+#### Tasks
+
+1. **Implement the Evidence Level (0–5) scale as a deterministic function.**
+   - *Files/modules:* `src/services/evidenceEngine.ts`
+   - *Dependencies:* Phase 5
+   - *Expected result:* Pure function mapping evidence signals to Levels 0–5 per PRD §12 (0=Claimed, 1=Mentioned in resume, 2=Present in project, 3=Demonstrated in working project, 4=Deployed/used in realistic environment, 5=Independently verified via GitHub/project activity); GitHub-sourced evidence is explicitly capped as "detected, not verified mastery" per Architecture's decision log — it can reach Level 3–4 automatically but Level 5 requires an additional signal (e.g., sustained activity/CI passing), not GitHub presence alone.
+   - *Validation:* Unit tests cover each level transition with representative evidence-record combinations.
+
+2. **Implement the Evidence Engine's aggregation logic and repository.**
+   - *Files/modules:* `src/repositories/evidenceRepository.ts`, `src/services/evidenceEngine.ts` (extend), `src/app/api/evidence/route.ts` (`POST` manual evidence), `src/app/api/skills/[id]/evidence/route.ts` (`GET`)
+   - *Dependencies:* Task 1
+   - *Expected result:* Aggregates all `Evidence` rows for a `(user, skill)` pair from resume/manual/GitHub sources into a single computed Evidence Level; manual evidence entry validated (`sourceType`, `sourceUrl`, `description`) per PRD §5.6.
+   - *Validation:* Integration test adds evidence from two sources for the same skill and confirms the aggregated level reflects the strongest applicable evidence, not just the most recent.
+
+3. **Implement the Skill Gap Engine's deterministic status computation.**
+   - *Files/modules:* `src/services/skillGapEngine.ts`, `src/app/api/targets/[id]/gap/route.ts` (`GET`)
+   - *Dependencies:* Task 2, Phase 4
+   - *Expected result:* For every `JobRequirement` on a target, computes exactly one status — Strong / Partial / Claimed-Unproven / Missing / Low Priority — from `UserSkill` presence + Evidence Level + `JobRequirement.importance`, per PRD §5.5's rule ("computed deterministically... not purely from an AI call"); status includes a human-readable explanation string (e.g., "Claimed on resume, no supporting evidence found").
+   - *Validation:* Unit test table covering each status outcome (e.g., no `UserSkill` + no evidence → Missing; `UserSkill` present + Evidence Level 0 → Claimed-Unproven; `UserSkill` present + Evidence Level ≥3 → Strong) matches PRD §5.5/§13 expectations, including the explicit "resume claims expert, no GitHub evidence → Claimed-Unproven, not Strong" edge case.
+
+4. **Build the skill detail page and evidence UI.**
+   - *Files/modules:* `src/app/skills/[id]/page.tsx`, `SkillBadge`, `EvidenceList` components
+   - *Dependencies:* Task 3
+   - *Expected result:* Shows status with explanation, evidence items (source type, URL, level), and an "add evidence" form for manual entries.
+   - *Validation:* E2E test opens a skill detail page for a Missing skill and a Strong skill and confirms the displayed status/evidence matches the underlying data.
+
+5. **Handle the "unmapped skill" edge case in the gap view.**
+   - *Files/modules:* `src/services/skillGapEngine.ts` (extend), skill list UI
+   - *Dependencies:* Task 3
+   - *Expected result:* Skills stored as "unmapped" (from Phase 4 Task 2's fallback) are surfaced distinctly rather than silently excluded from the gap computation.
+   - *Validation:* Integration test includes an unmapped requirement and confirms it appears in the gap-analysis response with a distinguishable status/flag.
+
+#### MVP boundary
+- Evidence Level 0–5 is computed internally for deterministic gap/scoring logic. Detailed 0–5 UI surfacing is post-MVP.
+- `Assessment` is schema-only/future for MVP; do not implement assessment workflows.
+
+#### Definition of Done
+- [ ] Every `JobRequirement` on a target has exactly one computed status, per PRD §5.5's acceptance criteria.
+- [ ] Every status is explainable via a visible rationale string.
+- [ ] Evidence Level (0–5) is computed deterministically and testable in isolation from any AI call.
+- [ ] GitHub-only evidence is capped below full "verified mastery" per the documented rule.
+
+---
+
+### Phase 7 — GitHub Integration & Sync
+
+#### Objectives
+Deliver PRD §5.9 end-to-end: repository import and evidence detection (Docker, CI/CD, tests, README), respecting the concrete scan-depth and rate-limit values fixed in Architecture §13.
+
+#### Prerequisites
+Phase 3 (GitHub OAuth linking) and Phase 6 (Evidence Engine ready to receive GitHub-sourced evidence) complete.
+
+#### Tasks
+
+1. **Implement repository listing via the GitHub REST/GraphQL API.**
+   - *Files/modules:* `src/services/githubSyncService.ts`, `src/repositories/githubRepository.ts`
+   - *Dependencies:* Phase 3 Task 4 (encrypted token available)
+   - *Expected result:* Fetches the user's public repositories (private repos only if separately authorized, per PRD §5.9); handles zero-repository accounts gracefully (PRD §13: "no evidence detected yet" state, not a blocking error).
+   - *Validation:* Integration test against a test GitHub account with a few known repos confirms the correct repo list is returned; a test account with zero public repos confirms the graceful empty state.
+
+2. **Implement scan-depth-limited technology/signal detection.**
+   - *Files/modules:* `src/services/githubSyncService.ts` (extend)
+   - *Dependencies:* Task 1
+   - *Expected result:* For each repo, inspects only the top-level file tree plus known signal files — `Dockerfile`, `docker-compose.yml`, `.github/workflows/*`, `README.md`, dependency manifests, top-level test directory names — per the scan-depth limit fixed in Architecture §13; detects languages, Docker usage, CI/CD presence, test presence, README-quality heuristic (non-empty + minimum length as a proxy).
+   - *Validation:* Unit test against 3–4 fixture repo file-tree structures (has Dockerfile+CI+tests, has nothing, has only a README, has a deeply nested structure the scanner should NOT recurse into) confirms correct, depth-bounded detection.
+
+3. **Implement ETag-based conditional caching and GitHub rate-limit handling.**
+   - *Files/modules:* `src/services/githubSyncService.ts` (extend)
+   - *Dependencies:* Task 1
+   - *Expected result:* Stores and sends ETags on repeat requests; on a GitHub rate-limit response, serves the last cached sync with a "last synced X ago" indicator and queues a retry with backoff, per PRD §13.
+   - *Validation:* Unit test mocks a 429/rate-limit response and confirms the fallback-to-cache path is taken instead of failing the whole sync.
+
+4. **Implement manual sync with the fixed 15-minute cooldown and the token-revoked edge case.**
+   - *Files/modules:* `src/app/api/github/sync/route.ts` (`POST`)
+   - *Dependencies:* Tasks 1–3
+   - *Expected result:* `POST /api/github/sync` enqueues a sync job; returns 429 if called again within 15 minutes (Architecture §13's fixed value); on an invalid/revoked token (detected via a 401 from GitHub), marks the connection as needing reconnect rather than crashing, per PRD §13.
+   - *Validation:* Integration test calls sync twice within the cooldown window and confirms the second call returns 429; a mocked-invalid-token test confirms the reconnect-needed state is set.
+
+5. **Wire detected signals into Evidence records.**
+   - *Files/modules:* `src/jobs/handlers/githubSyncHandler.ts`
+   - *Dependencies:* Task 2, Phase 6 Task 2
+   - *Expected result:* Each detected signal (Dockerfile present, CI workflow present, tests present, etc.) creates/updates an `Evidence` row with `sourceType = github`, correctly mapped to the relevant `Skill` (e.g., Dockerfile → "Docker" skill), which then feeds the Evidence Engine's level computation.
+   - *Validation:* Integration test: sync a fixture repo with a Dockerfile and CI workflow, confirm `Evidence` rows are created for "Docker" and "CI/CD" with `sourceType = github`.
+
+6. **Trigger Skill Gap Engine and downstream recalculation after sync completes.**
+   - *Files/modules:* `src/jobs/handlers/githubSyncHandler.ts` (extend)
+   - *Dependencies:* Task 5, Phase 6 Task 3
+   - *Expected result:* After evidence updates, re-runs the Skill Gap Engine for affected skills across all of the user's active targets (matches PRD Flow B).
+   - *Validation:* Integration test: a skill's status changes from Missing to Partial after a sync that adds relevant evidence.
+
+7. **Build the GitHub connection and sync-status UI.**
+   - *Files/modules:* `SyncStatusIndicator` component, repository list view (`GET /api/github/repositories`), "Sync now" button
+   - *Dependencies:* Tasks 4–6
+   - *Expected result:* Shows last-synced timestamp, a disabled/cooldown state on the sync button within the 15-minute window, and a "reconnect needed" banner if the token is invalid.
+   - *Validation:* E2E test triggers a sync, confirms the button disables, and confirms the repository list updates after job completion.
+
+#### Definition of Done
+- [ ] Repository scan respects the fixed scan-depth limit (no deep clone/recursive analysis).
+- [ ] Manual sync is rate-limited to the documented 15-minute cooldown.
+- [ ] Rate-limit and token-revocation failures degrade gracefully (cached data + reconnect prompt), never a hard failure.
+- [ ] A successful sync visibly updates Evidence and, downstream, skill status.
+
+---
+
+### Phase 8 — Roadmap Engine, Project Generator & Scoring
+
+#### Objectives
+Deliver PRD §5.7, §5.8, and §5.10 end-to-end: prioritized roadmap generation, multi-skill project recommendations, the five readiness sub-scores plus overall Readiness, and Next Best Action — using the concrete Priority formula and MVP Readiness formula now documented in `ARCHITECTURE.md`.
+
+#### Prerequisites
+Phase 6 (skill statuses + evidence) and Phase 7 (GitHub evidence feeding in) complete.
+
+#### Tasks
+
+1. **Implement the Readiness scoring formula.**
+   - *Files/modules:* `src/services/scoringService.ts`
+   - *Dependencies:* Phase 6
+   - *Expected result:* Computes Job Match, Skill Coverage, Evidence Strength, Portfolio Strength, Production Readiness as independent 0–100 sub-scores. MVP Portfolio Strength uses deterministic/basic portfolio signals (project relevance, README/documentation, tests, CI/CD, deployment evidence, and repository quality); the full Portfolio Quality Audit is post-MVP., then **MVP Readiness = SkillCoverage×0.40 + EvidenceStrength×0.30 + PortfolioStrength×0.20 + ProductionReadiness×0.10** per PRD §5.10. Job Match is separate. Interview Readiness is post-MVP and must not be used as an MVP input.
+   - *Validation:* Unit test table covering a "high coverage, low evidence" profile and a "low coverage, high evidence" profile confirms the weighted formula and disclaimer logic behave as specified.
+
+2. **Implement the Priority Score formula for roadmap ordering.**
+   - *Files/modules:* `src/services/roadmapEngine.ts`
+   - *Dependencies:* Phase 6 Task 3
+   - *Expected result:* Implements the formula now fixed in Architecture §4 — `Priority = JobImportance×0.35 + GapSeverity×0.30 + EvidenceDeficit×0.20 + PortfolioValue×0.15` — as a pure, unit-testable function, stored on `RoadmapItem.priority`.
+   - *Validation:* Unit test confirms a Missing/required skill outranks a Partial/preferred skill, and that the function is stable/deterministic for identical inputs.
+
+3. **Implement the Project Generator with multi-skill coverage scoring.**
+   - *Files/modules:* `src/ai/prompts/generateProjectIdeas.ts`, `src/ai/schemas/projectIdeas.ts`, `src/services/projectGeneratorService.ts`
+   - *Dependencies:* Phase 2 Task 5, Task 2
+   - *Expected result:* Given the user's current gap-skill list, generates project ideas each covering ≥3 gap skills where possible (PRD §5.8), with Skill Coverage %, Portfolio Value, Difficulty, Estimated Time, and (projected) Evidence Strength; falls back to a single-skill project suggestion if no viable multi-skill combination exists.
+   - *Validation:* Unit test against a fixed gap-skill list (matching the PRD §36 demo scenario: REST APIs, PostgreSQL, Redis, Docker, CI/CD, cloud deployment) confirms a plausible multi-skill project is generated with internally consistent scores (coverage ≤100%, etc.).
+
+4. **Implement the Roadmap Engine's generation and recalculation logic.**
+   - *Files/modules:* `src/services/roadmapEngine.ts` (extend), `src/ai/prompts/generateRoadmap.ts`, `src/ai/schemas/roadmap.ts`
+   - *Dependencies:* Tasks 2–3
+   - *Expected result:* Generates `RoadmapItem` rows (skill, why-it-matters, current status, missing evidence, recommended task, project idea, Definition of Done, estimated effort, milestone) per PRD §5.7; every item has a non-empty Definition of Done (validated); recalculates on target change, deadline change, new evidence, or project completion (PRD §14/§15/Flow B); on AI generation failure, falls back to a deterministic template-based item per skill (per PRD §5.7's specified fallback).
+   - *Validation:* Unit test confirms every generated item has a non-empty DoD; integration test confirms recalculation is triggered by a simulated GitHub-evidence update (reuses Phase 7 Task 6's trigger point) and is idempotent under a simulated concurrent trigger (PRD §13's "two recalculation triggers fire concurrently" edge case).
+
+5. **Implement Next Best Action.**
+   - *Files/modules:* `src/services/scoringService.ts` (extend, per Architecture §4's updated Scoring Service responsibility), `src/app/api/targets/[id]/next-best-action/route.ts`
+   - *Dependencies:* Task 2, Task 4
+   - *Expected result:* Returns the highest-`priority` `RoadmapItem` not yet Completed/Verified, with a rationale string referencing job relevance and gap severity per PRD §4; recalculates whenever roadmap state changes.
+   - *Validation:* Integration test confirms the returned action matches the highest-priority open item and that completing that item changes the next recommendation.
+
+6. **Wire up remaining scoring/roadmap API routes and milestone status tracking.**
+   - *Files/modules:* `src/app/api/targets/[id]/roadmap/route.ts` (`GET`), `src/app/api/targets/[id]/roadmap/regenerate/route.ts` (`POST`), `src/app/api/roadmap-items/[id]/route.ts` (`PATCH`), `src/app/api/targets/[id]/scores/route.ts` (`GET`), `src/app/api/projects/route.ts`, `src/app/api/projects/[id]/route.ts`
+   - *Dependencies:* Tasks 1–5
+   - *Expected result:* Matches Architecture §8 exactly; roadmap item status transitions (Not Started/In Progress/Blocked/Completed/Verified) enforced per PRD §4 — "Verified" only settable automatically by evidence detection or manually with an explicit "self-reported" flag.
+   - *Validation:* Integration test attempts to set "Verified" without the self-reported flag and without qualifying evidence, and confirms it's rejected or downgraded to a self-reported flag.
+
+7. **Build the roadmap, project, and score-breakdown UI.**
+   - *Files/modules:* `RoadmapItemCard`, `ProjectCard`, `ReadinessGauge`, `NextBestActionBanner` components; `src/app/targets/[id]/page.tsx` (roadmap section); `src/app/projects/[id]/page.tsx`
+   - *Dependencies:* Task 6
+   - *Expected result:* Score breakdown is always visible (never a bare percentage, per PRD §6/§16); roadmap items show DoD and status controls; Next Best Action banner is prominent on the dashboard.
+   - *Validation:* E2E test walks through: view roadmap → mark an item In Progress → mark it Completed → confirm scores and Next Best Action update.
+
+#### Definition of Done
+- [ ] Readiness and all five sub-scores compute correctly with a visible formula/breakdown (no opaque single percentage).
+- [ ] Roadmap items are ordered by the documented Priority formula and each has a non-empty Definition of Done.
+- [ ] Project Generator prefers multi-skill-gap coverage and falls back sensibly when no strong combination exists.
+- [ ] Next Best Action reflects the current highest-priority open item and updates when state changes.
+- [ ] Roadmap recalculates correctly on all four documented triggers (target change, deadline change, new evidence, project completion).
+
+---
+
+### Phase 9 — Dashboard Integration & Testing
+
+#### Objectives
+Assemble the full dashboard (PRD Flow A/B/C end-to-end), and build out the automated test suite across all prior phases before deployment hardening.
+
+#### Prerequisites
+Phases 3–8 complete (every underlying feature exists and has its own API).
+
+#### Tasks
+
+1. **Build the onboarding flow tying together sign-up → target creation → resume/GitHub → dashboard.**
+   - *Files/modules:* `src/app/onboarding/page.tsx` (multi-step), routing logic to redirect first-time users here
+   - *Dependencies:* Phases 3–7
+   - *Expected result:* Matches PRD Flow A exactly, step by step.
+   - *Validation:* E2E test executes Flow A from a fresh account to a rendered dashboard, matching the PRD's "under 5 minutes of interaction time" success criterion as a smoke check (excluding AI latency).
+
+2. **Build the main dashboard page.**
+   - *Files/modules:* `src/app/dashboard/page.tsx`, `src/components/dashboard/*`
+   - *Dependencies:* Task 1, Phase 8
+   - *Expected result:* Per active target: readiness scores, Next Best Action, skill gap summary, active projects/roadmap items — each in its own React Query-backed widget with an independent error boundary (Architecture §5), so one failing widget (e.g., stale GitHub sync status) doesn't break the page.
+   - *Validation:* E2E test loads the dashboard with a fully seeded demo account and confirms all widgets render; a targeted test simulates one API failure (e.g., mock a 500 on the scores endpoint) and confirms the rest of the dashboard still renders.
+
+3. **Implement React Query wiring and cache invalidation rules across the app.**
+   - *Files/modules:* `src/lib/queryClient.ts`, per-feature query/mutation hooks
+   - *Dependencies:* Task 2
+   - *Expected result:* Completing a roadmap item invalidates dashboard + roadmap queries; confirming resume extraction invalidates skill/evidence queries; GitHub sync completion invalidates evidence/score queries — matching Architecture §5's cache-invalidation rules.
+   - *Validation:* E2E test completes a roadmap item and confirms the dashboard's readiness score updates without a manual page refresh.
+
+4. **Implement Job Comparison (P1, included if timeline allows, per PRD's MVP/Post-MVP split).**
+   - *Files/modules:* `src/app/targets/[id]/compare/page.tsx`
+   - *Dependencies:* Task 2
+   - *Expected result:* Matches PRD Flow C: shared skills, unique skills, per-job readiness across two or more targets.
+   - *Validation:* E2E test creates two targets with overlapping skills and confirms the comparison view correctly identifies shared vs. unique skills.
+   - *Note:* This task is explicitly **P1/optional** per PRD §8 — implement only after all P0 items across every phase are complete; skip under time pressure without blocking Phase 10.
+
+5. **Write the remaining unit test coverage for deterministic business logic.**
+   - *Files/modules:* `tests/unit/` — Skill Gap Engine, Evidence Engine, Priority formula, Readiness formula, skill normalization (if not already fully covered in earlier phases)
+   - *Dependencies:* Phases 4–8
+   - *Expected result:* All deterministic scoring/status logic has unit test coverage independent of any live AI or GitHub call, per the Testing Strategy in §5 below.
+   - *Validation:* `npm run test:unit` passes with meaningful coverage on `src/services/`.
+
+6. **Write integration tests for each feature's API surface.**
+   - *Files/modules:* `tests/integration/` — one suite per route group (`targets`, `resume`, `github`, `evidence`, `roadmap`, `scores`)
+   - *Dependencies:* Phases 3–8
+   - *Expected result:* Every endpoint in Architecture §8 has at least one happy-path and one error-path integration test.
+   - *Validation:* `npm run test:integration` passes against a disposable test database.
+
+7. **Write end-to-end tests for the three PRD Core User Flows.**
+   - *Files/modules:* `tests/e2e/flow-a-onboarding.spec.ts`, `tests/e2e/flow-b-github-update.spec.ts`, `tests/e2e/flow-c-compare.spec.ts`
+   - *Dependencies:* Tasks 1–4
+   - *Expected result:* Automates PRD §7 Flows A, B, and C exactly as described.
+   - *Validation:* `npm run test:e2e` passes in CI against a preview deployment or local build.
+
+8. **Build fixed AI-evaluation test cases (per source-spec §34's "AI evaluation" testing category).**
+   - *Files/modules:* `tests/ai-eval/` — fixed sample job descriptions, resumes, and expected schema-conformant (not exact-match) outputs
+   - *Dependencies:* Phase 4 Task 2, Phase 5 Task 4, Phase 8 Task 3–4
+   - *Expected result:* A repeatable check that AI outputs remain schema-valid and don't fabricate skills/evidence absent from the source text, across prompt changes.
+   - *Validation:* Test suite runs against the real AI provider (flagged as a slower, possibly-manual/CI-optional suite given cost) and asserts schema conformance plus a basic "no invented named technology" heuristic check.
+
+#### Definition of Done
+- [ ] Onboarding, dashboard, and job-comparison flows are fully wired and demoable end-to-end.
+- [ ] Unit, integration, and E2E suites all pass in CI.
+- [ ] Every API endpoint from Architecture §8 has automated test coverage.
+- [ ] AI-evaluation fixtures exist and catch schema-violating or fabrication-prone prompt regressions.
+
+---
+
+### Phase 10 — Deployment & Polish
+
+#### Objectives
+Apply cross-cutting hardening (rate limiting, error-state polish, accessibility pass, seed/demo data) and complete the staging → production deployment.
+
+#### Prerequisites
+Phase 9 complete (feature-complete, tested application).
+
+#### Tasks
+
+1. **Implement rate limiting on expensive endpoints.**
+   - *Files/modules:* `src/lib/rateLimit.ts`, applied to `/api/targets/:id/analyze`, `/api/resume`, `/api/github/sync`
+   - *Dependencies:* Phase 2 Task 3
+   - *Expected result:* Enforces the concrete limits fixed in Architecture §13 (5 requests/10 min for analyze/resume; 1 sync/15 min per user) with a 429 response.
+   - *Validation:* Integration test exceeds each limit and confirms 429 with a `Retry-After`-style hint in the response body.
+
+2. **Complete the security hardening pass.**
+   - *Files/modules:* Cross-cutting review against Architecture §12
+   - *Dependencies:* Phases 3–9
+   - *Expected result:* HTTPS enforced (platform-level), Zod validation confirmed on every route, output-encoding checked on any user-entered text rendered in the UI (job descriptions, resume-derived text), CSRF/OAuth-state re-verified, secrets confirmed to exist only in environment variables.
+   - *Validation:* Manual checklist walkthrough of Architecture §12's bullet list; a basic XSS-payload-in-job-description manual test confirms it renders as inert text, not executable markup.
+
+3. **Polish loading, empty, and error states across the app.**
+   - *Files/modules:* Various UI components across `src/app/`
+   - *Dependencies:* Phase 9
+   - *Expected result:* Every async widget has a loading skeleton, an explicit empty state (e.g., "no evidence detected yet" for zero-repo GitHub accounts per PRD §13), and a distinct error state (not a blank screen).
+   - *Validation:* Manual QA pass through every page with a fresh/empty account and with simulated API errors (via browser devtools network throttling/blocking).
+
+4. **Run an accessibility pass.**
+   - *Files/modules:* Cross-cutting; primarily shadcn/ui component usage review
+   - *Dependencies:* Phase 9
+   - *Expected result:* Keyboard navigation works for all forms and interactive elements; sufficient color contrast; form inputs have associated labels — meeting PRD §6's Accessibility requirement at a baseline (not a full WCAG audit) appropriate for MVP scope.
+   - *Validation:* Manual keyboard-only walkthrough of the sign-up → onboarding → dashboard flow; automated `axe`-based check (e.g., via Playwright's accessibility testing integration) on key pages.
+
+5. **Build demo/seed data for presentation.**
+   - *Files/modules:* `prisma/seed.ts` (extend), or a separate `prisma/seedDemo.ts`
+   - *Dependencies:* All prior phases
+   - *Expected result:* A ready-to-demo account matching the PRD §36 demo scenario (Backend Software Engineer Intern target, resume with Python/Git/REST strengths, GitHub repos showing partial Docker/PostgreSQL evidence) that can be loaded for a hackathon demo without waiting on live AI/GitHub calls.
+   - *Validation:* Running the demo seed script produces a dashboard that visibly matches the PRD §36 narrative (Strong: Python/Git/REST; Partial: PostgreSQL/Docker; Missing: Redis/CI-CD/cloud deployment).
+
+6. **Finalize production deployment.**
+   - *Files/modules:* Vercel production environment configuration, production Postgres instance
+   - *Dependencies:* Task 2
+   - *Expected result:* Follows the Deployment Plan in §9 below; `prisma migrate deploy` runs as an explicit pre-deploy step (Architecture §15), not automatically on cold start.
+   - *Validation:* Full smoke test of Flow A against the live production URL.
+
+7. **Write the README and environment setup documentation.**
+   - *Files/modules:* `README.md`
+   - *Dependencies:* All prior phases
+   - *Expected result:* Covers local setup, environment variables (cross-referenced from §7 below), running migrations/seed, running tests, and deployment steps — sufficient for a new team member (or grader/judge) to run the project from scratch.
+   - *Validation:* A team member other than the original author follows the README on a clean machine and successfully runs the app locally.
+
+#### Definition of Done
+- [ ] Rate limits are enforced and verified on all three specified endpoints.
+- [ ] Security checklist (Architecture §12) is walked through and confirmed.
+- [ ] No page shows a blank/broken state on empty data or a simulated API failure.
+- [ ] Demo seed data reproduces the PRD §36 demo scenario for presentation.
+- [ ] Production deployment is live and passes a full Flow A smoke test.
+- [ ] README allows a fresh clone to be running locally within a reasonable setup time.
+
+---
+
+## 4. Dependency Order
+
+- **Phase 0 → 1 → 2** are strictly sequential — nothing else can start without tooling, schema, and the backend skeleton.
+- **Phase 3 (Auth)** depends only on Phase 2, and everything from Phase 4 onward depends on Phase 3 (every feature route needs an authenticated `userId`).
+- **Phase 4 (Target/JD)** and **Phase 5 (Resume)** both depend only on Phase 3 and can, in principle, be built in either order or in parallel by two people — neither depends on the other. Both must exist before **Phase 6 (Skill Gap/Evidence)**, since it reads `JobRequirement` (from 4) and `UserSkill`/`Evidence` (from 5).
+- **Phase 7 (GitHub)** depends only on Phase 3 (OAuth linking) and Phase 6 (it writes into the Evidence Engine built there) — it can be built in parallel with Phase 4/5 by a second contributor, but its evidence-writing task (Task 5) needs Phase 6 Task 1–2 to exist first.
+- **Phase 8 (Roadmap/Scoring)** depends on Phase 6 (skill statuses) and Phase 7 (GitHub evidence feeding the scores) — it is the first phase that meaningfully needs *every* upstream data source.
+- **Phase 9 (Dashboard/Testing)** depends on all of Phases 3–8 existing as working APIs; it is integration, not new domain logic.
+- **Phase 10 (Deployment/Polish)** depends on Phase 9's tested, feature-complete application.
+
+**Parallelization guidance for a 2–4 person team:** after Phase 3, one contributor can take Phase 4 → 6 while another takes Phase 5 in parallel (both feeding Phase 6), and a third can take Phase 7 once Phase 6's Evidence Engine skeleton (Task 1–2) is merged. Phase 8 is a natural integration point and works best with the full team once 6 and 7 are both merged.
+
+---
+
+## 5. Testing Strategy
+
+| Level | Scope | Tooling | When |
+|---|---|---|---|
+| **Unit** | Skill normalization, Skill Gap Engine status rules, Evidence Level computation, Priority formula, Readiness formula, roadmap DoD validation | Vitest | Written alongside each service in Phases 2, 4, 6, 8 |
+| **Integration** | Every API route: request validation, auth/ownership enforcement, DB effects, error-path responses | Vitest + a disposable test Postgres schema/container | Written alongside each route group; consolidated pass in Phase 9 |
+| **API/contract** | Response shapes match Architecture §8 exactly (`{ data }` / `{ error: { code, message } }`) | Same integration suite | Phase 9 |
+| **Frontend** | Component-level rendering of loading/empty/error states for key widgets (`ReadinessGauge`, `RoadmapItemCard`, `SyncStatusIndicator`) | Vitest + React Testing Library | Phase 9–10 |
+| **End-to-end** | PRD's three Core User Flows (A/B/C) run against a real (or preview) deployment | Playwright | Phase 9 |
+| **AI evaluation** | Fixed job-description/resume fixtures checked for schema conformance and non-fabrication | Custom harness calling the real `AIProvider` | Phase 9, re-run on any prompt change |
+| **Manual QA** | Accessibility keyboard pass, XSS-payload-in-text-field check, demo-scenario walkthrough | Human tester | Phase 10 |
+
+**Non-negotiable coverage per Architecture's core decision:** every deterministic scoring/status function (Skill Gap Engine, Evidence Engine, Priority formula, Readiness formula) must have unit tests that pass **without any live AI or GitHub API call**, since these are explicitly designed to be explainable and reproducible independent of AI behavior.
+
+---
+
+## 6. Seed/Test Data
+
+| Dataset | Purpose | Introduced in |
+|---|---|---|
+| Canonical `Skill` table (~150–250 entries with categories + aliases) | Powers skill normalization across every feature | Phase 1 |
+| 3–5 fixed sample job descriptions (short/vague, well-formed backend JD, senior-level JD with unusual tech, a JD matching PRD §36's demo scenario) | AI extraction unit tests + fallback-path tests | Phase 4 |
+| 3–5 fixed sample resumes (standard CS-student format, non-traditional/career-switcher format per Persona "Arjun," minimal-content resume) | AI extraction unit tests | Phase 5 |
+| 3–4 fixture GitHub repo file-tree structures (Docker+CI+tests present; nothing present; README-only; deeply nested — to test scan-depth limiting) | GitHub detection unit tests | Phase 7 |
+| One full demo account (target, resume, GitHub evidence) matching PRD §36's demo scenario end-to-end | Hackathon/grader demo | Phase 10 |
+
+None of these datasets contain real personal data; sample resumes/job descriptions are synthetic or drawn from public templates.
+
+---
+
+## 7. Environment Variables
+
+| Variable | Used for | Introduced in |
+|---|---|---|
+| `DATABASE_URL` | Postgres connection string (Prisma) | Phase 0 |
+| `NEXTAUTH_URL` | Auth.js base URL | Phase 3 |
+| `NEXTAUTH_SECRET` | Auth.js session/JWT signing secret | Phase 3 |
+| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID | Phase 3 |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret | Phase 3 |
+| `TOKEN_ENCRYPTION_KEY` | Application-level encryption key for stored GitHub access tokens | Phase 3 |
+| `AI_PROVIDER_API_KEY` | Claude API (or OpenAI-compatible provider) key | Phase 2 |
+| `AI_PROVIDER_BASE_URL` | Override for provider endpoint (supports the provider-agnostic adapter) | Phase 2 |
+| `FILE_STORAGE_BUCKET_URL` / equivalent | Resume PDF object storage location (if using Vercel Blob/Supabase Storage rather than DB-stored binary) | Phase 5 |
+| `SENTRY_DSN` | Error tracking | Phase 0 |
+| `SENTRY_AUTH_TOKEN` | Sentry release/source-map upload (CI only) | Phase 10 |
+
+No real secret values are recorded anywhere in this document or in `.env.example` — only variable names and purposes, per the meta-prompt's requirement.
+
+---
+
+## 8. Git Strategy
+
+- **Branches:** `main` (always deployable, protected, requires passing CI + 1 review); short-lived feature branches per task or small task group, named `phase-<n>/<short-description>` (e.g., `phase-4/target-crud`, `phase-6/skill-gap-engine`).
+- **Commits:** Small, task-scoped commits referencing the phase/task number from this plan (e.g., `feat(phase-4): implement extractJobRequirements schema + prompt`). Avoid mixing schema migrations with unrelated feature code in the same commit.
+- **Pull requests:** One PR per phase task (or a small cluster of closely related tasks); PR description references the Definition of Done checklist item(s) it satisfies; CI (lint, unit, integration) must pass before merge; every PR gets an automatic Vercel preview deployment for manual review.
+- **Migrations:** Prisma migrations are committed with the PR that introduces the schema change; never edited after merging to `main` — a later change is a new migration.
+
+---
+
+## 9. Deployment Plan
+
+1. **Provision managed Postgres** (Neon or Supabase free tier) — create separate `dev`, `staging`/preview-branch, and `production` databases/branches, per Architecture §15.
+2. **Create the GitHub OAuth App** (for GitHub linking) with callback URLs registered for local dev, the Vercel preview domain pattern, and the production domain.
+3. **Create the Vercel project**, link it to the GitHub repository, and configure automatic preview deployments per PR.
+4. **Set environment variables** in the Vercel dashboard for Preview and Production environments separately (§7 above) — never committed to source control.
+5. **Run the initial production migration** (`prisma migrate deploy`) against the production database as an explicit, one-time manual step before the first production deploy.
+6. **Merge to `main`** to trigger the first production deployment; confirm the build succeeds and the app is reachable.
+7. **Configure the production deploy hook** so subsequent merges to `main` automatically run `prisma migrate deploy` as a pre-deploy build step (Architecture §15 — explicit step, not automatic on cold start).
+8. **Smoke-test production** by running PRD Flow A manually (or via the Phase 9 E2E suite pointed at the production URL) immediately after each deploy.
+9. **Load demo seed data** (Phase 10 Task 5) into a dedicated demo account on production (or a separate demo-only database) ahead of any presentation.
+
+---
+
+## 10. Final MVP Checklist
+
+Directly from PRD §9's MVP scope, cross-referenced to the phase that delivers it:
+
+- [ ] Authentication (Phase 3)
+- [ ] Create target job (Phase 4)
+- [ ] Paste job description + AI extraction (Phase 4)
+- [ ] Upload resume + AI extraction (Phase 5)
+- [ ] Job requirement extraction (Phase 4)
+- [ ] Skill normalization (Phase 2, used throughout)
+- [ ] Basic skill-gap analysis (Phase 6)
+- [ ] Evidence mapping — resume + manual + GitHub (Phases 5–7)
+- [ ] Personalized roadmap generation (Phase 8)
+- [ ] Milestone tracking (Phase 8)
+- [ ] GitHub OAuth (Phase 3)
+- [ ] GitHub repository scanning — basic evidence detection (Phase 7)
+- [ ] Dashboard (Phase 9)
+- [ ] Project recommendations (Phase 8)
+- [ ] Readiness metrics — Job Match, Skill Coverage, Evidence Strength, Portfolio Strength, Production Readiness (Phase 8)
+
+---
+
+## 11. Future Work
+
+Per PRD §9 Post-MVP list (not part of this plan's phases; pick up only after every item in §10 above is checked off):
+- Full adaptive Next Best Action recalculation engine (a simple rule-based v1 is delivered in Phase 8; the fully adaptive version is deferred)
+- Portfolio Quality Audit
+- Resume Evidence Improver
+- Full Evidence Level (0–5) UI surfacing beyond the skill detail page
+- Job description history / market-demand view
+
+Per PRD §17 Future Ideas (explicitly out of scope for this implementation plan entirely):
+- Interview Mode, LinkedIn/LeetCode/HackerRank integrations, public shareable readiness reports, browser extension, calendar-based scheduling, automated GitHub digest emails, AI mock interviews, external job-market APIs.
+
+---
+
+## 12. Cross-Document Consistency Check
+
+Verified against `PRD.md` and the updated `ARCHITECTURE.md` before finalizing this plan:
+
+| Check | Result |
+|---|---|
+| Every PRD P0/MVP feature (§8, §9) has a corresponding phase/task above | ✅ Phases 3–8 map 1:1 to PRD §9's MVP list (see §10 checklist) |
+| Every Architecture component (§4) has implementation tasks | ✅ Auth, Target, Resume, Skill Gap, Evidence, Roadmap, GitHub Sync, Scoring, Job Runner, Skill Normalization — each has a dedicated phase or task |
+| Every DB entity (Architecture §7) is required by an actual feature and appears in a task | ✅ Including `BackgroundJob`, added here as the necessary infra table implied by Architecture §2/§11 |
+| Every API endpoint (Architecture §8) maps to a real requirement and a task | ✅ Endpoint-by-endpoint mapping shown in Phase 3–8 task tables |
+| Auth/authorization requirements are implemented in the plan | ✅ Phase 3, reinforced by ownership checks tested in every subsequent phase's integration tests |
+| External integrations (GitHub, AI provider) are represented | ✅ Phase 7 (GitHub), Phase 2/4/5/8 (AI provider) |
+| MVP features are clearly separated from future features | ✅ §10 (MVP checklist) vs. §11 (Future Work), matching PRD §9's own split |
+| No contradictory technologies/requirements | ✅ Single Next.js modular monolith throughout; no conflicting stack introduced |
+| Implementation order respects dependencies | ✅ See §4 Dependency Order above; verified against each phase's Prerequisites |
+| Realistically buildable by a small student/hackathon team | ✅ 11 phases, vertical slices, explicit parallelization guidance for 2–4 people in §4 |
+
+No inconsistencies requiring further correction to `PRD.md` or `ARCHITECTURE.md` were found beyond the three targeted Architecture additions already made (Next Best Action ownership, concrete GitHub/rate-limit values, and the Priority formula) — see the top of `ARCHITECTURE.md`'s Component Architecture and Performance sections for those additions.

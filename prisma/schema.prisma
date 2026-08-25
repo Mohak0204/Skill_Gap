@@ -1,0 +1,318 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  githubUsername String?
+  githubAccessToken String? // encrypted at rest
+  githubTokenIv     String? // IV for decryption
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  targets       Target[]
+  userSkills    UserSkill[]
+  evidence      Evidence[]
+  projects      Project[]
+  githubRepos   GitHubRepository[]
+  assessments   Assessment[]
+  backgroundJobs BackgroundJob[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Target {
+  id              String    @id @default(cuid())
+  userId          String
+  title           String
+  company         String?
+  jobDescription  String
+  experienceLevel String?
+  deadline        DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobRequirements JobRequirement[]
+  roadmaps        Roadmap[]
+  readinessSnapshots ReadinessSnapshot[]
+
+  @@index([userId])
+}
+
+model Skill {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  category  String
+  aliases   String   @default("") // Comma-separated aliases
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobRequirements JobRequirement[]
+  userSkills      UserSkill[]
+  evidence        Evidence[]
+  roadmapItems    RoadmapItem[]
+  assessments     Assessment[]
+  projectSkills   ProjectSkill[]
+
+  @@index([category])
+}
+
+model JobRequirement {
+  id              String @id @default(cuid())
+  targetId        String
+  skillId         String
+  importance      String // "required" | "preferred"
+  requirementType String // e.g., "technical", "soft", "experience"
+  seniorityIndicator String?
+  createdAt       DateTime @default(now())
+
+  target Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  skill  Skill  @relation(fields: [skillId], references: [id])
+
+  @@unique([targetId, skillId])
+}
+
+model UserSkill {
+  id         String @id @default(cuid())
+  userId     String
+  skillId    String
+  confidence Int    @default(50) // 0-100
+  source     String // "resume" | "github" | "manual"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id])
+
+  @@unique([userId, skillId])
+}
+
+model Evidence {
+  id          String   @id @default(cuid())
+  userId      String
+  skillId     String
+  sourceType  String   // "github" | "resume" | "manual"
+  sourceUrl   String?
+  description String
+  strength    Int      @default(0) // 0-5
+  verifiedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repositoryId String?
+  projectId    String?
+
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill  Skill @relation(fields: [skillId], references: [id])
+  repository GitHubRepository? @relation(fields: [repositoryId], references: [id])
+  project    Project?          @relation(fields: [projectId], references: [id])
+
+  @@index([userId, skillId])
+  @@index([sourceType])
+}
+
+model Project {
+  id            String  @id @default(cuid())
+  userId        String
+  title         String
+  description   String?
+  repositoryUrl String?
+  deploymentUrl String?
+  status        String  @default("recommended") // "recommended" | "in_progress" | "completed"
+  isRecommended Boolean @default(false)
+  difficulty    String?
+  estimatedHours Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectSkills ProjectSkill[]
+  roadmapItems  RoadmapItem[]
+  evidence      Evidence[]
+
+  @@index([userId])
+}
+
+model ProjectSkill {
+  id        String @id @default(cuid())
+  projectId String
+  skillId   String
+  relevance Int    @default(50) // 0-100
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  skill   Skill   @relation(fields: [skillId], references: [id])
+
+  @@unique([projectId, skillId])
+}
+
+model Roadmap {
+  id       String @id @default(cuid())
+  targetId String
+  title    String
+  status   String @default("active") // "active" | "archived"
+  priority String @default("medium") // "high" | "medium" | "low"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  target       Target        @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  roadmapItems RoadmapItem[]
+
+  @@index([targetId])
+}
+
+model RoadmapItem {
+  id             String  @id @default(cuid())
+  roadmapId      String
+  skillId        String
+  projectId      String?
+  task           String
+  whyItMatters   String?
+  currentStatus  String? // current skill status snapshot
+  missingEvidence String?
+  definitionOfDone String
+  milestone      String?
+  estimatedHours Int?
+  status         String  @default("not_started") // "not_started" | "in_progress" | "blocked" | "completed" | "verified"
+  selfReported   Boolean @default(false)
+  priority       Float   @default(0) // computed priority score
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  roadmap Roadmap  @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+  skill   Skill    @relation(fields: [skillId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@index([roadmapId])
+  @@index([status])
+}
+
+model GitHubRepository {
+  id           String   @id @default(cuid())
+  userId       String
+  githubId     String
+  name         String
+  fullName     String?
+  url          String
+  description  String?
+  language     String?
+  languages    String?  // JSON string of language breakdown
+  stars        Int      @default(0)
+  forks        Int      @default(0)
+  hasDockerfile Boolean  @default(false)
+  hasCiCd      Boolean  @default(false)
+  hasTests     Boolean  @default(false)
+  hasReadme    Boolean  @default(false)
+  readmeLength Int      @default(0)
+  lastActivity DateTime?
+  lastSyncedAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  evidence Evidence[]
+
+  @@unique([userId, githubId])
+  @@index([lastSyncedAt])
+}
+
+model Assessment {
+  id          String    @id @default(cuid())
+  userId      String
+  skillId     String
+  score       Int       @default(0)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Reserved for post-MVP verification/Interview Mode; unused in MVP.
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id])
+
+  @@index([userId, skillId])
+}
+
+model ReadinessSnapshot {
+  id                String   @id @default(cuid())
+  targetId          String
+  jobMatch          Int      @default(0)
+  skillCoverage     Int      @default(0)
+  evidenceStrength  Int      @default(0)
+  portfolioStrength Int      @default(0)
+  productionReadiness Int    @default(0)
+  overallReadiness  Int      @default(0)
+  trigger           String?  // what triggered this snapshot
+  createdAt         DateTime @default(now())
+
+  target Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([targetId])
+}
+
+model BackgroundJob {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String   // "analyze_target" | "extract_resume" | "github_sync" | "generate_roadmap"
+  status      String   @default("pending") // "pending" | "running" | "complete" | "failed"
+  payload     String?  // JSON
+  result      String?  // JSON
+  error       String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}

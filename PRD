@@ -1,0 +1,471 @@
+# PRD.md — SkillGap: Personalized Career Skill-Gap & Evidence Roadmap
+
+## 1. Product Overview
+
+**Product name:** SkillGap
+
+**One-line description:** SkillGap turns a target job description plus a user's resume and GitHub activity into an evidence-based, personalized roadmap that shows what they already know, what they are missing, how to prove each skill, what to build next, and how to track progress toward job-readiness.
+
+**Problem being solved:** Job seekers compare themselves to job descriptions and get generic, non-actionable advice ("learn Docker," "learn AWS"). Generic advice does not distinguish between a skill the user already has, a skill they claim but cannot prove, a skill they partially used, and a skill that is genuinely missing. It also does not account for which skills matter most for a *specific* target role.
+
+**Proposed solution:** SkillGap compares a structured extraction of a target job description against a structured extraction of the user's resume and GitHub activity, computes a per-skill status (Strong / Partial / Claimed-Unproven / Missing / Low Priority), attaches **evidence** to every claim, and generates a personalized, evidence-driven roadmap — including project recommendations that close multiple gaps at once, milestone tracking, and readiness scoring.
+
+**Target users:**
+- College students preparing for internships
+- Fresh graduates
+- Developers switching roles
+- Developers targeting a specific company or job
+- Hackathon participants seeking portfolio projects aligned with jobs
+- Self-taught developers who need structured direction
+
+**Primary value proposition:** SkillGap does not just tell users what to learn — it tells users what to **build, deploy, and prove**, and tracks the evidence trail that makes them credible in an interview, not just "aware" of a technology.
+
+---
+
+## 2. Goals and Objectives
+
+### Primary goals
+- Give users an accurate, explainable picture of their readiness for a specific target job.
+- Convert vague skill gaps into concrete, measurable, evidence-producing tasks.
+- Automatically detect evidence of skill growth from GitHub activity over time.
+- Recommend a small number of high-leverage projects instead of many disconnected tutorials.
+
+### Secondary goals
+- Help users compare readiness across multiple target jobs.
+- Surface unsupported resume claims and suggest how to back them with evidence.
+- Prepare users for interviews using questions derived from their own projects.
+
+### Measurable success criteria
+- A user can go from "paste job description" to "see a personalized roadmap" in under 5 minutes of interaction time (excluding AI processing latency).
+- At least 80% of roadmap items include a concrete, checkable Definition of Done.
+- GitHub sync correctly detects Docker, CI/CD, and testing configuration in at least 90% of well-formed repositories (evaluated against a test repository set).
+- Users who complete a recommended project see a measurable increase (non-zero) in Evidence Strength and Readiness scores without manual re-entry.
+
+---
+
+## 3. User Personas
+
+### Persona 1 — Priya, the Final-Year CS Student
+- **Role:** Undergraduate computer science student
+- **Goals:** Land a backend/software engineering internship; know exactly what to build to be competitive.
+- **Pain points:** Overwhelmed by generic "roadmap" content online; doesn't know if her existing projects are "good enough"; unsure what evidence recruiters actually look for.
+- **Typical usage:** Pastes 2–3 internship job descriptions, connects GitHub, uploads resume, checks the dashboard weekly, works through the recommended project.
+
+### Persona 2 — Arjun, the Career Switcher
+- **Role:** Working professional (e.g., QA engineer) switching into backend development.
+- **Goals:** Understand the real gap between his current skill set and a new target role; avoid wasting time on skills he already has.
+- **Pain points:** Limited free time; needs prioritized, high-leverage tasks; needs to know which existing experience is transferable.
+- **Typical usage:** Creates one target job, uploads resume with non-software experience, connects GitHub with a handful of side projects, relies heavily on "Next Best Action."
+
+### Persona 3 — Meera, the Hackathon Participant
+- **Role:** Student looking for a portfolio project idea aligned with real job requirements.
+- **Goals:** Find one project that demonstrably covers several in-demand skills.
+- **Pain points:** Doesn't want to build something disconnected from what companies want.
+- **Typical usage:** Uses the Project Generator and Smart Project Scoring feature primarily; less interested in long-term tracking.
+
+### Persona 4 — Dev, the Self-Taught Developer
+- **Role:** Self-taught developer without a formal CS background.
+- **Goals:** Structure his own learning without a curriculum; prove skills without a degree to back them up.
+- **Pain points:** No external validation of skill; unsure what "production-ready" actually means.
+- **Typical usage:** Relies heavily on Evidence Levels and Portfolio Quality Audit to know what "good" looks like.
+
+---
+
+## 4. User Stories
+
+Format: *As a [user], I want [action], so that [benefit].*
+
+### Authentication & Onboarding
+- As a new user, I want to sign up and log in securely, so that my data is private and persistent.
+  - **Acceptance criteria:** Email/password or OAuth sign-up; session persists across browser reloads; incorrect credentials show a clear error; passwords are never stored in plaintext.
+- As a user, I want to connect my GitHub account, so that SkillGap can analyze my repositories as evidence.
+  - **Acceptance criteria:** GitHub OAuth consent screen clearly lists requested scopes; user can disconnect GitHub at any time; disconnecting stops further repository syncing.
+
+### Target Job Management
+- As a user, I want to create a target job with a title, company, and job description, so that SkillGap can analyze what it requires.
+  - **Acceptance criteria:** Title and job description are required; company and deadline are optional; job is saved and appears in "My Targets."
+- As a user, I want to save multiple target jobs, so that I can compare readiness across roles.
+  - **Acceptance criteria:** User can create, view, edit, archive, and delete targets; each target has an independent roadmap and readiness score.
+
+### Job Description Analysis
+- As a user, I want the system to extract required and preferred skills from a pasted job description, so that I don't have to manually identify them.
+  - **Acceptance criteria:** Extraction returns a structured list of skills grouped by category with an importance flag (required/preferred) and seniority indicators; extraction completes within a bounded time or shows a clear loading/error state.
+
+### Resume & Profile Import
+- As a user, I want to upload my resume as a PDF, so that SkillGap can extract my skills, projects, and experience.
+  - **Acceptance criteria:** Accepts PDF up to a defined size limit; extracted skills/projects are shown to the user for review before being saved; user can manually correct extracted data.
+- As a user, I want to manually add or edit skills, so that I can correct AI extraction mistakes.
+  - **Acceptance criteria:** Manual skill edits are marked with `source = manual` and are preserved across re-syncs.
+
+### Skill Gap Analysis
+- As a user, I want to see each required skill's status (Strong/Partial/Claimed-Unproven/Missing/Low Priority), so that I know exactly where I stand.
+  - **Acceptance criteria:** Every skill in the target's requirement list has exactly one status; status is explainable (user can see why it was assigned that status).
+- As a user, I want to see the evidence behind each skill status, so that I trust the assessment.
+  - **Acceptance criteria:** Each skill detail page lists evidence items with source type, source URL (if applicable), and evidence level (0–5).
+
+### Roadmap & Projects
+- As a user, I want a personalized roadmap of tasks, so that I know exactly what to do next.
+  - **Acceptance criteria:** Each roadmap item includes skill, why it matters, current status, missing evidence, recommended task, project idea, Definition of Done, estimated effort, and milestone.
+- As a user, I want project recommendations that close multiple skill gaps at once, so that I don't waste time on disconnected tutorials.
+  - **Acceptance criteria:** Each generated project lists the skills it covers, a skill coverage score, difficulty, and estimated time.
+- As a user, I want to mark roadmap tasks as Not Started / In Progress / Blocked / Completed / Verified, so that I can track my progress.
+  - **Acceptance criteria:** Status changes are persisted; "Verified" can only be set automatically by the system (via evidence detection) or manually with a clear "self-reported" flag.
+
+### GitHub Evidence Engine
+- As a user, I want SkillGap to scan my public GitHub repositories, so that my evidence updates automatically as I build.
+  - **Acceptance criteria:** Sync detects languages, frameworks, Dockerfiles, CI/CD workflows, tests, and README presence; sync respects GitHub API rate limits and shows last-synced timestamp.
+- As a user, I want to manually trigger a re-sync, so that I can refresh evidence after finishing a project.
+  - **Acceptance criteria:** Manual sync is rate-limited (e.g., once every N minutes) to avoid abuse.
+
+### Readiness & Scoring
+- As a user, I want to see multiple readiness scores instead of one vague percentage, so that I understand *why* I'm not ready.
+  - **Acceptance criteria:** Dashboard shows Job Match, Skill Coverage, Evidence Strength, Portfolio Strength, and Production Readiness, each with a visible formula/explanation.
+- As a user, I want a "Next Best Action" recommendation, so that I always know the single highest-value thing to do next.
+  - **Acceptance criteria:** Recommendation is recalculated when roadmap state changes; recommendation includes a rationale referencing job relevance and gap severity.
+
+### Interview Mode (Post-MVP feature, included for story completeness)
+- As a user, I want interview questions generated from my own projects, so that I can prepare realistically.
+  - **Acceptance criteria:** Questions reference specific technologies detected in the user's repositories; questions are not fabricated about skills without evidence.
+
+---
+
+## 5. Functional Requirements
+
+### 5.1 Authentication Module
+- **Description:** Handles sign-up, login, session management, and GitHub OAuth linking.
+- **Inputs:** Email/password or OAuth credentials; GitHub OAuth authorization code.
+- **Outputs:** Authenticated session (JWT or session cookie); linked GitHub identity.
+- **Business rules:** One GitHub account per user; email must be unique.
+- **Validation:** Email format validation; password minimum length/complexity; OAuth state parameter validated to prevent CSRF.
+- **Error states:** Duplicate email, invalid credentials, expired session, GitHub OAuth denial/failure.
+- **Permissions:** Public (unauthenticated) can access sign-up/login only; all other routes require a valid session.
+
+### 5.2 Target Job Management
+- **Description:** Create, edit, archive, delete target jobs.
+- **Inputs:** Title, company (optional), job description text, experience level, deadline (optional).
+- **Outputs:** Target record; triggers job description analysis pipeline.
+- **Business rules:** A user may have multiple active targets; deleting a target soft-deletes its roadmap and requirement data.
+- **Validation:** Job description minimum length (e.g., 50 characters) to ensure meaningful extraction.
+- **Error states:** Empty/too-short job description, AI extraction failure (fallback: allow manual skill tagging).
+- **Permissions:** Owner-only read/write.
+
+### 5.3 Job Description Analysis (AI)
+- **Description:** Extracts required/preferred skills, responsibilities, technologies, experience expectations, and seniority indicators from a job description; groups related technologies into skill categories.
+- **Inputs:** Raw job description text.
+- **Outputs:** Structured JSON: list of `{skill, category, importance, requirementType}`.
+- **Business rules:** Output must conform to a fixed schema; unrecognized skills are still recorded (as "unmapped") rather than dropped.
+- **Validation:** Schema validation on AI output; retry once on malformed JSON.
+- **Error states:** AI provider timeout/error → queue for retry, show "Analysis pending" state; persistent failure → allow manual skill entry.
+- **Permissions:** Owner-only.
+
+### 5.4 Resume Upload & Extraction
+- **Description:** Extracts programming languages, frameworks, databases, cloud/tools, testing, architecture concepts, soft skills, projects, education, certifications, experience, and claimed proficiency from an uploaded resume PDF.
+- **Inputs:** PDF file.
+- **Outputs:** Structured `UserSkill` and `Project` records with `source = resume`.
+- **Business rules:** Extracted items are shown to the user for confirmation before being merged into their profile (reduces hallucinated skills).
+- **Validation:** File type = PDF only; file size limit (e.g., 5 MB); text-extractability check (reject/flag scanned image-only PDFs with no text layer).
+- **Error states:** Corrupt file, unsupported format, extraction returns empty text, AI extraction failure.
+- **Permissions:** Owner-only; resume file access restricted to owner and short-lived signed URLs.
+
+### 5.5 Skill Gap Engine
+- **Description:** Compares target requirements against user profile and evidence to assign a status per skill.
+- **Inputs:** Target's `JobRequirement` list, user's `UserSkill` list, user's `Evidence` list.
+- **Outputs:** Per-skill status: Strong / Partial / Claimed-Unproven / Missing / Low Priority, with an explanation.
+- **Business rules:** Status is computed deterministically from evidence level and requirement importance (see Architecture §10 for the rules), not purely from an AI call, to keep it explainable and reproducible.
+- **Validation:** Every required/preferred skill in the target must receive a status.
+- **Error states:** Missing evidence data → default to Claimed-Unproven or Missing based on presence in `UserSkill`.
+- **Permissions:** Owner-only.
+
+### 5.6 Evidence Engine
+
+> **MVP boundary:** The Evidence Engine computes Evidence Level 0–5 internally because downstream gap/scoring logic uses it. The detailed 0–5 scale is not required to be surfaced in the MVP UI; full UI surfacing is post-MVP.
+- **Description:** Aggregates evidence from GitHub, resume, and manual entry per skill, and assigns an Evidence Level (0–5).
+- **Inputs:** GitHub repository metadata, resume-derived project descriptions, manually added evidence links.
+- **Outputs:** `Evidence` records tied to a skill and user, each with `sourceType`, `sourceUrl`, `description`, `strength`, `verifiedAt`.
+- **Business rules:** GitHub-derived evidence is capped at "detected, not verified mastery" — it improves evidence level but is explicitly labeled as automated detection, not proof.
+- **Validation:** Evidence strength must map to a defined 0–5 scale.
+- **Error states:** GitHub data unavailable (rate limit/outage) → use last cached sync, show staleness indicator.
+- **Permissions:** Owner-only.
+
+### 5.7 Roadmap & Milestone Engine
+- **Description:** Generates a prioritized list of roadmap items per target, each with a task, project idea, Definition of Done, estimated effort, and milestone.
+- **Inputs:** Skill Gap Engine output, Evidence Engine output, user deadline.
+- **Outputs:** `Roadmap` and `RoadmapItem` records.
+- **Business rules:** Roadmap recalculates when target job changes, deadline changes, new evidence is detected, or a project is completed.
+- **Validation:** Each roadmap item must have a non-empty Definition of Done.
+- **Error states:** AI generation failure → fall back to a deterministic template-based roadmap item for that skill.
+- **Permissions:** Owner-only.
+
+### 5.8 Project Generator & Smart Scoring
+- **Description:** Generates project ideas that cover multiple skill gaps simultaneously and scores them.
+- **Inputs:** List of gap skills, their priority, user's estimated available time (if provided).
+- **Outputs:** `Project` suggestion with Skill Coverage %, Portfolio Value, Difficulty, Estimated Time, Job Relevance, Evidence Strength (projected).
+- **Business rules:** Prefer projects covering ≥3 gap skills when possible; never recommend a project requiring a skill the user has marked as "not interested" (post-MVP preference setting).
+- **Validation:** Scores must be 0–100 or defined enum values; must be internally consistent (e.g., skill coverage cannot exceed 100%).
+- **Error states:** No viable multi-skill project found → fall back to single-skill project recommendation.
+- **Permissions:** Owner-only.
+
+### 5.9 GitHub Integration
+- **Description:** OAuth-connects a user's GitHub account, imports public repositories, and periodically (or on-demand) scans them for technology and evidence signals.
+- **Inputs:** GitHub OAuth token, repository list.
+- **Outputs:** `GitHubRepository` records with detected metadata (languages, Dockerfile presence, CI/CD workflows, tests, README quality heuristic, last activity).
+- **Business rules:** Only public repository metadata and file listings are scanned unless the user explicitly grants private repo access; sync respects GitHub API rate limits with backoff.
+- **Validation:** OAuth token validity check before each sync; token refresh handling.
+- **Error states:** Token revoked/expired → prompt reconnect; rate limit hit → queue and retry with backoff; repository deleted upstream → mark evidence as stale.
+- **Permissions:** Owner-only; user can disconnect GitHub, which stops future syncs and optionally purges stored repository metadata.
+
+### 5.10 Readiness Scoring
+
+> **MVP Portfolio Strength:** computed deterministically from available portfolio signals such as relevant projects, repository quality, README/documentation presence, tests, CI/CD, deployment evidence, and project-to-target relevance. The deeper AI-assisted Portfolio Quality Audit remains post-MVP.
+- **Description:** Computes Job Match, Skill Coverage, Evidence Strength, Portfolio Strength, Production Readiness, and overall Readiness.
+- **Inputs:** Skill statuses, evidence levels, basic portfolio/production signals.
+- **Outputs:** Numeric scores (0–100%) with a visible breakdown/formula.
+- **Business rules:** **MVP Readiness = Skill Coverage × 40% + Evidence Strength × 30% + Portfolio Strength × 20% + Production Readiness × 10%.** Job Match remains a separate metric. Interview Readiness is post-MVP and is not an MVP input to the overall Readiness score.
+- **Validation:** All weighted inputs must be present or defaulted to 0 with a clear "insufficient data" label.
+- **Error states:** Missing sub-scores → show partial readiness with a disclaimer rather than a misleading 100%-based number.
+- **Permissions:** Owner-only.
+
+### 5.11 Dashboard
+- **Description:** Central view showing target job, readiness scores, skill gaps, strong skills, active projects, next best action, and recently verified evidence.
+- **Inputs:** Aggregated data from all modules above.
+- **Outputs:** Rendered summary view.
+- **Business rules:** "Next Best Action" is recalculated server-side whenever underlying data changes, not just on page load, to avoid stale recommendations shown to the user.
+- **Validation:** N/A (read-only aggregation view).
+- **Error states:** Partial data load (e.g., GitHub sync in progress) → show loading skeletons per widget, not a blocking full-page spinner.
+- **Permissions:** Owner-only.
+
+---
+
+## 6. Non-Functional Requirements
+
+- **Performance:** Dashboard initial load under 2s on cached data; AI-driven analyses (resume/job parsing) complete within 15s or return an async "processing" state with polling/webhook update.
+- **Security:** All traffic over HTTPS; passwords hashed (bcrypt/argon2) if not using a managed auth provider; GitHub tokens encrypted at rest; least-privilege OAuth scopes.
+- **Reliability:** Core read paths (dashboard, roadmap) must degrade gracefully if AI or GitHub services are down (show cached data instead of failing entirely).
+- **Scalability:** Architecture must support moving background sync/AI jobs to a queue as user count grows, without a full rewrite (see Architecture §13).
+- **Maintainability:** Layered backend (routes/services/repositories); AI prompts and schemas centralized and versioned.
+- **Accessibility:** WCAG 2.1 AA color contrast on core dashboard views; keyboard navigability for primary flows; alt text for icons conveying status.
+- **Usability:** No single onboarding step should require more than one page of input; extracted data always shown for user confirmation before being saved as fact.
+- **Privacy:** Resume files and GitHub tokens are user-deletable; no cross-user data sharing; anonymized aggregate features (job market insight) opt-in only, post-MVP.
+- **Observability:** Structured logs for AI calls (prompt version, latency, success/failure) and GitHub sync jobs; error tracking integrated (e.g., Sentry-equivalent) for both frontend and backend.
+
+---
+
+## 7. Core User Flows
+
+### Flow A — First-Time Onboarding to Roadmap
+1. User signs up.
+2. User creates a target job (title, description, optional company/deadline).
+3. Job description analysis runs; user reviews extracted requirements.
+4. User uploads resume and/or connects GitHub.
+5. Resume/GitHub extraction runs; user reviews and confirms extracted skills/projects.
+6. Skill Gap Engine computes status per skill.
+7. Roadmap Engine generates roadmap items and project recommendations.
+8. Dashboard shows readiness scores and Next Best Action.
+
+### Flow B — GitHub Evidence Update Loop
+1. User completes a recommended project locally and pushes to GitHub (adds Dockerfile, tests, CI workflow).
+2. User triggers manual sync (or scheduled sync runs).
+3. GitHub Integration detects new signals in the repository.
+4. Evidence Engine updates evidence level/records for the affected skills.
+5. Skill Gap Engine recalculates status; Roadmap Engine recalculates roadmap and readiness scores.
+6. Dashboard reflects updated scores and "Recently Verified" list.
+
+### Flow C — Comparing Multiple Target Jobs
+1. User creates a second target job.
+2. Both targets run through analysis independently.
+3. User opens "Compare Jobs" view showing shared skills, unique skills, and per-job readiness.
+4. User decides which target to prioritize based on shared-skill leverage.
+
+---
+
+## 8. Feature Prioritization
+
+| Feature | Priority |
+|---|---|
+| Authentication (email/password or OAuth) | P0 |
+| Target job creation + job description analysis | P0 |
+| Resume upload + extraction | P0 |
+| Manual skill entry/edit | P0 |
+| Skill Gap Engine (status per skill) | P0 |
+| Evidence Engine (basic, resume + manual sources) | P0 |
+| GitHub OAuth + repository import | P0 |
+| GitHub evidence detection (Docker/CI/tests/README) | P0 |
+| Roadmap generation with Definition of Done | P0 |
+| Project Generator (multi-skill projects) | P0 |
+| Milestone/task status tracking | P0 |
+| Readiness scoring (multi-metric) | P0 |
+| Dashboard | P0 |
+| Next Best Action | P1 |
+| Job comparison across multiple targets | P1 |
+| Portfolio Quality Audit | P1 |
+| Resume Evidence Improver | P1 |
+| Evidence Level scale (0–5) surfaced in UI | P1 |
+| Adaptive roadmap recalculation on deadline/target change | P1 |
+| Job description history / "market demand" view | P2 |
+| Interview Mode | P2 |
+| Job market insight from external job APIs | P2 |
+| LinkedIn import | P3 |
+| LeetCode/HackerRank integration | P3 |
+| Public shareable readiness report | P3 |
+| Browser extension | P3 |
+| AI mock interviews | P3 |
+
+---
+
+## 9. MVP Scope
+
+**MVP includes:**
+1. Authentication
+2. Create target job
+3. Paste job description + AI extraction
+4. Upload resume + AI extraction
+5. Job requirement extraction
+6. Skill normalization
+7. Basic skill-gap analysis
+8. Evidence mapping (resume + manual + GitHub)
+9. Personalized roadmap generation
+10. Milestone tracking
+11. GitHub OAuth
+12. GitHub repository scanning (basic evidence detection)
+13. Dashboard
+14. Project recommendations
+15. Readiness metrics (Job Match, Skill Coverage, Evidence Strength, Portfolio Strength, Production Readiness) using the MVP formula defined in §5.10
+
+**Post-MVP:**
+- Next Best Action recalculation engine (can ship as a simple rule-based v1 within MVP if time allows, but full adaptive version is post-MVP)
+- Job comparison across multiple targets
+- Portfolio Quality Audit
+- Resume Evidence Improver
+- Full Evidence Level (0–5) UI surfacing
+- Job description history/market demand view
+
+**Future ideas:**
+- Interview Mode
+- Job market insight from external APIs
+- LinkedIn/LeetCode/HackerRank integrations
+- Public shareable readiness report, browser extension, AI mock interviews
+
+---
+
+## 10. Data Requirements
+
+### Entities (see Architecture §7 for full ER diagram)
+- **User** — account identity, GitHub link.
+- **Target** — a job the user is pursuing, with the raw job description.
+- **JobRequirement** — a skill required/preferred by a Target, with importance.
+- **Skill** — canonical skill entity with category and aliases (used for normalization).
+- **UserSkill** — a skill claimed/possessed by a user, with confidence and source.
+- **Evidence** — a piece of proof tied to a user+skill (GitHub, resume, manual).
+- **Project** — a user's project (existing or recommended), linked to a repository/deployment.
+- **ProjectSkill** — join entity mapping a Project to the Skills it demonstrates/covers, with relevance.
+- **Roadmap** — the generated plan for a Target.
+- **RoadmapItem** — an individual task within a Roadmap, tied to a Skill.
+- **GitHubRepository** — synced metadata about a user's repository.
+- **ReadinessSnapshot** — historical readiness sub-scores and overall score for a Target, used for trend/history display.
+- **Assessment** — (post-MVP-leaning, included in MVP data model for extensibility) a scored check for a skill.
+  - Assessment records are reserved for post-MVP verification/Interview Mode and are unused in the MVP.
+
+### Data that must persist
+User accounts, targets, job requirements, skills, user skills, evidence, projects, roadmaps/roadmap items, GitHub repository metadata, readiness score history (for trend display).
+
+### Data that may be cached
+GitHub API responses (repo listings, file trees) — cached with a TTL and refreshed on manual sync or schedule; AI extraction results for identical/unchanged input (avoid redundant LLM calls); computed readiness scores (recomputed on relevant state change, cached between changes).
+
+---
+
+## 11. External Integrations
+
+- **GitHub OAuth + REST/GraphQL API** — repository import, technology/evidence detection.
+- **AI/LLM Provider (OpenAI-compatible or equivalent, e.g., Claude API)** — resume parsing, job description parsing, skill normalization, gap explanation, roadmap/project generation, resume evidence critique.
+- **Authentication provider** — either self-managed (JWT + hashed passwords) or a managed provider (e.g., Auth.js/Clerk/Supabase Auth) — see Architecture §9 for the chosen approach and rationale.
+- **PDF text extraction library** — for resume parsing (local library, not an external network call).
+- **(Post-MVP) External job-board APIs** — for job market insight; explicitly out of MVP scope per source spec.
+
+---
+
+## 12. Security and Privacy Requirements
+
+- Resumes and GitHub data can contain personal information; treat both as sensitive.
+- All authentication credentials hashed/stored securely; sessions expire and are revocable.
+- GitHub integration requests the minimum OAuth scopes needed (public repo read by default); private repo access requires explicit, separate consent.
+- Users can disconnect GitHub at any time; disconnecting stops further syncing.
+- Users can delete their uploaded resume and imported profile data; deletion cascades to derived Evidence records citing that resume.
+- Private repository contents (if authorized) are used only for the stated evidence-detection purpose and are never displayed to other users.
+- AI/data-processing use is disclosed to the user (what is sent to the LLM provider, and that resume/job text may be processed by a third-party AI API).
+- Rate limiting on file uploads, AI-triggering endpoints, and GitHub manual sync to prevent abuse and cost overruns.
+
+---
+
+## 13. Edge Cases and Failure Scenarios
+
+- Job description is too short/vague to extract meaningful requirements → prompt user to add more detail or allow manual skill tagging.
+- Resume PDF is a scanned image with no extractable text → detect and inform user; offer manual entry.
+- AI extraction returns malformed JSON → retry once, then fall back to manual entry with an error banner.
+- GitHub account has zero public repositories → show "no evidence detected yet" state rather than blocking the flow.
+- GitHub API rate limit exceeded → serve last cached sync with a "last synced X ago" indicator; queue retry.
+- User revokes GitHub OAuth access from GitHub's side (not from SkillGap) → next sync attempt fails; system detects invalid token and prompts reconnect.
+- User deletes a target job that has an in-progress roadmap → confirm destructive action; soft-delete with a recovery window (e.g., 30 days) before hard delete.
+- Duplicate/near-duplicate skills from different sources (e.g., "JS" vs "JavaScript") → normalized via the `Skill.aliases` mapping; unmapped novel skills stored as "unmapped" pending normalization.
+- User has conflicting evidence (resume claims expert-level skill, GitHub shows no related repos) → status resolves to Claimed/Unproven, not Strong, with an explanation shown to the user.
+- Very large repositories causing slow scans → cap scan depth (e.g., top-level files + key config files) and time out gracefully.
+- Two roadmap recalculation triggers fire concurrently (e.g., GitHub sync completes while user edits target) → recalculation is idempotent and last-write-consistent; UI shows "recalculating" state to avoid confusing the user with a half-updated view.
+
+---
+
+## 14. Assumptions and Constraints
+
+**Assumptions (explicitly labeled):**
+- **[ASSUMPTION]** The project is built by a small student/hackathon team (1–4 people) within a limited timeframe (days to a few weeks), so MVP scope is deliberately constrained.
+- **[ASSUMPTION]** GitHub evidence detection only inspects repository metadata, file presence/names, and top-level file contents (e.g., `Dockerfile`, `.github/workflows/*`, `README.md`, test directory presence) — not deep static code analysis — to keep scanning fast and inexpensive.
+- **[ASSUMPTION]** "AI/LLM provider" is treated generically; the reference implementation assumes an OpenAI-compatible chat completion API with structured/JSON output support (this also covers Anthropic's Claude API, which supports structured outputs).
+- **[ASSUMPTION]** Only public GitHub repository data is used by default; private repository access is an explicit opt-in not required for MVP demo purposes.
+- **[ASSUMPTION]** A single default authentication method will be implemented for MVP (email/password or GitHub OAuth reused as login) rather than supporting many identity providers.
+- **[ASSUMPTION]** External job-market data aggregation (§18 in the source spec) is explicitly out of MVP scope per the source material and is not built even as a stub.
+- **[ASSUMPTION]** "LinkedIn/profile information" import is manual text entry only for MVP (no LinkedIn API integration, which requires special partner access).
+
+**Constraints:**
+- Must be realistically buildable and deployable by a small student team.
+- Must avoid unnecessary infrastructure complexity (no microservices, no Kubernetes).
+- Must keep AI usage cost-bounded (cache results, avoid redundant calls, use deterministic code where possible per source spec §27).
+
+---
+
+## 15. Success Metrics
+
+- **Activation:** % of signed-up users who complete onboarding (target job + resume/GitHub connected) within their first session.
+- **Depth of use:** Average number of roadmap items marked "In Progress" or "Completed" per active user.
+- **Evidence growth:** % of users whose Evidence Strength score increases within 14 days of connecting GitHub.
+- **Trust/explainability:** % of skill statuses that include at least one visible evidence citation.
+- **Retention:** % of users who return to the dashboard after their first GitHub sync-triggered score change.
+
+---
+
+## 16. Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| LLM hallucinates skills/evidence not actually present | High — undermines core trust proposition | Use deterministic code for GitHub/metadata detection (per source spec §27); require AI outputs to conform to a strict schema; show extracted data for user confirmation before saving as fact. |
+| GitHub API rate limits throttle sync at scale | Medium | Cache aggressively, use conditional requests (ETags), queue and backoff, allow manual sync with cooldown. |
+| AI provider cost overrun | Medium | Cache identical-input results, batch where possible, cap resume/job description length, rate-limit AI-triggering endpoints. |
+| Users distrust a single opaque "readiness %" | Medium | Always show the score breakdown/formula (per source spec §30), never a black-box number. |
+| Resume parsing produces low-quality extraction for non-standard resume formats | Medium | Always show extracted data for manual review/correction; never silently trust extraction. |
+| Scope creep beyond a buildable MVP (spec lists 20+ advanced features) | High for a hackathon timeline | Strict adherence to MVP list in §9; advanced features explicitly deferred. |
+| Private data exposure (resume, GitHub tokens) | High | Encrypt tokens at rest, scope minimal OAuth permissions, provide delete/disconnect controls, no cross-user data sharing. |
+
+---
+
+## 17. Future Enhancements
+
+- LinkedIn import
+- LeetCode/HackerRank integration
+- Portfolio website analysis
+- Coding assessment generation
+- Company-specific preparation content
+- Job application tracking
+- Skill trend tracking / peer benchmarking
+- Mentor review workflow
+- Public skill profile / shareable readiness report
+- Browser extension for analyzing job descriptions in-place
+- Calendar-based roadmap scheduling
+- Automated GitHub progress summaries (e.g., weekly digest)
+- AI mock interviews

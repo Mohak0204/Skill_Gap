@@ -1,0 +1,580 @@
+# ARCHITECTURE.md — SkillGap Technical Architecture
+
+## 1. Architecture Overview
+
+SkillGap is built as a **modular monolith**: a single Next.js application (frontend + API routes) backed by a PostgreSQL database, with clearly separated internal layers (routes → services → repositories) so components can later be split out (e.g., a background worker) without a rewrite.
+
+**Why a modular monolith and not microservices:**
+- The team is small (student/hackathon scale); microservices add operational overhead (multiple deployments, service discovery, network failure modes) with no corresponding benefit at this scale.
+- All core domain objects (User, Target, Skill, Evidence, Roadmap) are tightly related and queried together (e.g., the dashboard joins across nearly every entity) — a single relational database with transactional consistency is simpler and more correct than a distributed system.
+- A single deployable unit is far easier to build, test, and deploy within a hackathon/student timeline.
+
+The one component that is architected as logically separate from request/response handling is **long-running work** (AI calls, GitHub sync): these run as asynchronous background jobs (implemented as a lightweight in-process/serverless job queue for MVP, upgradeable to a dedicated queue later — see §13) so user-facing requests stay fast.
+
+---
+
+## 2. Technology Stack
+
+| Layer | Technology | Purpose | Why chosen | Alternatives considered |
+|---|---|---|---|---|
+| Frontend | Next.js (App Router) + TypeScript | UI rendering, routing, SSR where useful | Single framework for both frontend and API layer reduces moving parts; strong ecosystem; free-tier friendly deployment (Vercel) | Separate React SPA + Express backend (more moving parts); SvelteKit (smaller ecosystem for this use case) |
+| Styling/UI | Tailwind CSS + shadcn/ui | Fast, consistent UI construction | Utility-first CSS speeds up hackathon-pace UI work; shadcn/ui gives accessible, unstyled-by-default components | MUI (heavier, more opinionated), plain CSS (slower to iterate) |
+| Backend/API | Next.js API routes (Route Handlers) | HTTP API layer | Colocated with frontend, no separate deploy; sufficient for MVP traffic | Separate Node/Express or FastAPI backend (more infra to manage for this scope) |
+| Database | PostgreSQL | Primary relational data store | Relational integrity fits the entity-heavy domain (Users, Targets, Skills, Evidence, Roadmaps all relate); free managed tiers available (Neon/Supabase) | MongoDB (weaker fit for highly relational, join-heavy queries like the dashboard) |
+| ORM | Prisma | Type-safe DB access, migrations | Strong TypeScript integration, migration tooling, works well with Next.js | Drizzle ORM (viable alternative, less mature migration tooling at time of writing), raw SQL (slower to iterate) |
+| Authentication | Auth.js (NextAuth) with Credentials + GitHub providers | User sign-up/login, GitHub OAuth linking | Native Next.js integration; supports both password-based and GitHub OAuth in one system, which SkillGap needs anyway for GitHub linking | Clerk/Supabase Auth (also valid; Auth.js chosen to avoid an extra paid dependency and to unify login + GitHub linking in one OAuth flow) |
+| AI/LLM | Anthropic Claude API (or any OpenAI-compatible provider) with structured/JSON output | Resume parsing, job description parsing, skill normalization, roadmap/project generation, evidence critique | Structured output support reduces hallucination risk; provider-agnostic prompt design keeps the system portable | Direct OpenAI API (equally valid; treated as interchangeable via a thin provider-adapter layer) |
+| File storage | Managed object storage (e.g., Vercel Blob / Supabase Storage) or DB-stored binary for MVP | Resume PDF storage | Simple, free-tier friendly; short-lived signed URLs for private access | Self-hosted S3-compatible storage (unnecessary operational overhead for MVP) |
+| Caching | In-memory + DB-backed cache table (Redis optional, post-MVP) | Cache GitHub API responses and AI extraction results by content hash | Avoids a new infra dependency for MVP; Redis is a clear post-MVP upgrade if load requires it | Redis from day one (adds infra cost/complexity not justified at MVP scale) |
+| Background jobs | Vercel Cron / serverless scheduled functions + a `jobs` DB table (simple queue pattern) for MVP | Run GitHub sync and AI analysis asynchronously | No extra infrastructure required; DB-backed queue is simple to reason about and inspect | BullMQ + Redis (better at scale, unnecessary complexity for MVP) |
+| Deployment | Vercel (app) + Neon/Supabase (Postgres) | Hosting | Free/generous free tiers, zero-config CI/CD from GitHub, matches Next.js natively | Render/Railway (viable alternative for the backend workloads if split out later) |
+| Monitoring | Vercel Analytics/Logs + Sentry (or equivalent free-tier error tracker) | Error tracking, performance visibility | Free tiers sufficient for a hackathon/student project; low setup cost | Self-hosted ELK stack (excessive for this scale) |
+| Testing | Vitest/Jest (unit), Playwright (E2E) | Automated testing | Strong TypeScript/Next.js support, fast feedback loop | Cypress (viable alternative to Playwright) |
+
+---
+
+## 3. System Architecture Diagram
+
+```mermaid
+flowchart LR
+    U[User Browser] -->|HTTPS| FE[Next.js Frontend]
+    FE -->|REST/Fetch| API[Next.js API Routes]
+    API --> AUTH[Auth Service]
+    API --> TARGETSVC[Target Service]
+    API --> RESUMESVC[Resume Service]
+    API --> GAPSVC[Skill Gap Engine]
+    API --> EVSVC[Evidence Engine]
+    API --> ROADMAPSVC[Roadmap Engine]
+    API --> GHSVC[GitHub Sync Service]
+    API --> SCORESVC[Scoring Service]
+
+    AUTH --> DB[(PostgreSQL)]
+    TARGETSVC --> DB
+    RESUMESVC --> DB
+    GAPSVC --> DB
+    EVSVC --> DB
+    ROADMAPSVC --> DB
+    GHSVC --> DB
+    SCORESVC --> DB
+
+    TARGETSVC --> AI[AI/LLM Provider]
+    RESUMESVC --> AI
+    ROADMAPSVC --> AI
+    GHSVC -->|OAuth + REST/GraphQL| GH[GitHub API]
+
+    RESUMESVC --> STORE[(File Storage - Resumes)]
+    JOBQ[Background Job Runner] --> GHSVC
+    JOBQ --> RESUMESVC
+    JOBQ --> TARGETSVC
+    JOBQ --> DB
+```
+
+---
+
+## 4. Component Architecture
+
+| Component | Responsibility |
+|---|---|
+| **Auth Service** | Sign-up/login, session issuance, GitHub OAuth linking/unlinking. |
+| **Target Service** | CRUD for target jobs; triggers job description analysis. |
+| **Resume Service** | Handles PDF upload, text extraction, AI-based skill/project extraction, user confirmation flow. |
+| **Skill Gap Engine** | Deterministic + AI-assisted comparison of target requirements vs. user profile/evidence; assigns skill status. |
+| **Evidence Engine** | Aggregates evidence records from all sources; computes Evidence Level (0–5) per skill. |
+| **Roadmap Engine** | Generates roadmap items, project recommendations, milestones, Definitions of Done; recalculates on relevant state changes. |
+| **GitHub Sync Service** | OAuth token management, repository import, metadata/technology/CI-CD/test detection, scheduled + manual sync. |
+| **Scoring Service** | Computes Job Match, Skill Coverage, Evidence Strength, Portfolio Strength, Production Readiness, and overall Readiness. |
+| **Background Job Runner** | Executes async work (AI calls, GitHub sync) outside the request/response cycle; tracks job status for polling. |
+| **Skill Normalization module** (shared library used by Job/Resume/GitHub services) | Maps raw extracted terms to canonical `Skill` entities via aliases/categories. |
+
+---
+
+## 5. Frontend Architecture
+
+**Pages/screens:**
+- `/sign-in`, `/sign-up`
+- `/onboarding` (create first target, connect GitHub/resume)
+- `/dashboard` (per active target: readiness scores, next best action, skill gaps, active projects)
+- `/targets` (list), `/targets/[id]` (target detail: requirements, roadmap)
+- `/targets/[id]/compare` (post-MVP: compare with another target)
+- `/skills/[id]` (skill detail: evidence, recommended challenge, DoD)
+- `/projects/[id]` (project detail: skills covered, tasks, milestones, repo/deployment links)
+- `/settings` (account, GitHub connection, data deletion)
+
+**Components:** Reusable `SkillBadge`, `EvidenceList`, `ReadinessGauge`, `RoadmapItemCard`, `ProjectCard`, `NextBestActionBanner`, `SyncStatusIndicator`, `UploadDropzone`.
+
+**State management:** Server state (targets, roadmap, scores) fetched via React Query (TanStack Query) for caching, background refetch, and optimistic updates on status changes; local UI state (form inputs, modals) via component-local `useState`. No global client store needed at this scope — avoids introducing Redux/Zustand complexity.
+
+**API communication:** REST calls via a typed API client (`fetch` wrapper) hitting Next.js API routes; mutations use React Query mutations with cache invalidation of affected queries (e.g., completing a roadmap item invalidates the dashboard and roadmap queries).
+
+**Authentication flow:** Auth.js session cookie; client reads session via `useSession()`; protected pages redirect unauthenticated users to `/sign-in`; GitHub linking flow redirects to GitHub OAuth consent and back to `/settings` with a success/error toast.
+
+**Form validation:** Shared Zod schemas used on both client (immediate feedback) and server (source of truth) for target creation, resume upload metadata, and manual skill entry.
+
+**Error handling:** Centralized API error shape (`{ code, message }`); React Query `onError` surfaces toast notifications; per-widget error boundaries on the dashboard so one failed widget (e.g., GitHub sync status) doesn't break the whole page.
+
+---
+
+## 6. Backend Architecture
+
+Layered structure within each Next.js API route module:
+
+```
+Route Handler (controller) → Service (business logic) → Repository (Prisma data access)
+```
+
+- **Controllers/routes:** Parse/validate request (Zod), call the relevant service, map service result/errors to HTTP responses. No business logic here.
+- **Services:** Contain business rules (e.g., Skill Gap Engine status computation, Readiness formula, Roadmap recalculation triggers). Orchestrate calls to repositories and to the AI provider adapter.
+- **Repositories/data access:** Thin Prisma-based data access functions per entity (e.g., `targetRepository.findById`, `evidenceRepository.upsertForSkill`). Isolates Prisma specifics from services.
+- **DTOs:** Request/response types defined via Zod schemas + inferred TypeScript types; internal domain objects are not returned raw (e.g., internal `sourceUrl` tokens or raw AI payloads are shaped before returning to the client).
+- **Validation:** Zod schemas at the route boundary; domain-level validation (e.g., "every required skill must have a status") inside services.
+- **Authentication/authorization:** Middleware resolves the session/user on every API route; services receive an authenticated `userId` and enforce owner-only access at the repository query level (`WHERE userId = ?`) — never trusting a client-supplied user id.
+- **Error handling:** Services throw typed domain errors (`NotFoundError`, `ValidationError`, `ExternalServiceError`); a shared error-mapping layer converts these to consistent HTTP status codes/JSON bodies.
+- **Business logic placement:** Skill normalization, gap-status computation, and readiness scoring are implemented as **deterministic, unit-testable functions** in the service layer — not embedded in AI prompts — per the product principle of minimizing hallucination risk (source spec §27).
+
+---
+
+## 7. Database Design
+
+### Entity list (summary — see PRD §10 for descriptions)
+User, Target, JobRequirement, Skill, UserSkill, Evidence, Project, ProjectSkill, Roadmap, RoadmapItem, GitHubRepository, Assessment.
+
+### Key relationships
+- `User` 1—N `Target`
+- `Target` 1—N `JobRequirement` (each referencing one `Skill`)
+- `User` 1—N `UserSkill` (each referencing one `Skill`)
+- `User` 1—N `Evidence` (each referencing one `Skill`, optionally one `GitHubRepository` or `Project`)
+- `User` 1—N `Project`; `Project` N—N `Skill` via `ProjectSkill`
+- `Target` 1—1..N `Roadmap`; `Roadmap` 1—N `RoadmapItem` (each referencing one `Skill`, optionally one `Project`)
+- `User` 1—N `GitHubRepository`
+- `User` 1—N `Assessment` (each referencing one `Skill`)
+
+### Important fields, indexes, constraints
+- `Skill.name` — unique; `Skill.aliases` — text array or join table for normalization lookups; index on `Skill.category`.
+- `UserSkill(userId, skillId)` — unique composite constraint (one entry per user per skill; confidence/source updated in place).
+- `Evidence(userId, skillId)` — indexed (not unique — multiple evidence items per skill are expected); index on `sourceType` for filtering.
+- `JobRequirement(targetId, skillId)` — unique composite constraint.
+- `RoadmapItem(roadmapId, skillId)` — indexed; `status` indexed for dashboard filtering.
+- `GitHubRepository(userId, githubId)` — unique composite constraint; index on `lastSyncedAt` for scheduling next sync.
+- All foreign keys `ON DELETE CASCADE` from `User` where appropriate (e.g., deleting a user cascades Targets, UserSkills, Evidence) to satisfy the "delete my data" privacy requirement; `Target` deletion cascades `JobRequirement`, `Roadmap`, `RoadmapItem` (soft-delete first, hard-delete after retention window per PRD §13).
+
+### Entity-Relationship Diagram
+
+```mermaid
+erDiagram
+    USER ||--o{ TARGET : creates
+    USER ||--o{ USER_SKILL : has
+    USER ||--o{ EVIDENCE : provides
+    USER ||--o{ PROJECT : owns
+    USER ||--o{ GITHUB_REPOSITORY : links
+    USER ||--o{ ASSESSMENT : takes
+
+    TARGET ||--o{ JOB_REQUIREMENT : defines
+    TARGET ||--o{ ROADMAP : generates
+
+    SKILL ||--o{ JOB_REQUIREMENT : referenced_by
+    SKILL ||--o{ USER_SKILL : referenced_by
+    SKILL ||--o{ EVIDENCE : referenced_by
+    SKILL ||--o{ ROADMAP_ITEM : referenced_by
+    SKILL ||--o{ ASSESSMENT : referenced_by
+    SKILL ||--o{ PROJECT_SKILL : referenced_by
+
+    PROJECT ||--o{ PROJECT_SKILL : covers
+    PROJECT ||--o{ ROADMAP_ITEM : recommended_as
+
+    ROADMAP ||--o{ ROADMAP_ITEM : contains
+
+    USER {
+        string id PK
+        string name
+        string email
+        string githubUsername
+        datetime createdAt
+    }
+    TARGET {
+        string id PK
+        string userId FK
+        string title
+        string company
+        text jobDescription
+        datetime deadline
+        datetime createdAt
+    }
+    JOB_REQUIREMENT {
+        string id PK
+        string targetId FK
+        string skillId FK
+        string importance
+        string requirementType
+    }
+    SKILL {
+        string id PK
+        string name
+        string category
+        string aliases
+    }
+    USER_SKILL {
+        string id PK
+        string userId FK
+        string skillId FK
+        int confidence
+        string source
+    }
+    EVIDENCE {
+        string id PK
+        string userId FK
+        string skillId FK
+        string sourceType
+        string sourceUrl
+        text description
+        int strength
+        datetime verifiedAt
+    }
+    PROJECT {
+        string id PK
+        string userId FK
+        string title
+        text description
+        string repositoryUrl
+        string deploymentUrl
+        string status
+    }
+    PROJECT_SKILL {
+        string id PK
+        string projectId FK
+        string skillId FK
+        int relevance
+    }
+    ROADMAP {
+        string id PK
+        string targetId FK
+        string title
+        string status
+        string priority
+    }
+    ROADMAP_ITEM {
+        string id PK
+        string roadmapId FK
+        string skillId FK
+        string projectId FK
+        text task
+        text milestone
+        int estimatedHours
+        string status
+    }
+    GITHUB_REPOSITORY {
+        string id PK
+        string userId FK
+        string githubId
+        string name
+        string url
+        json metadata
+        datetime lastSyncedAt
+    }
+    ASSESSMENT {
+        string id PK
+        string userId FK
+        string skillId FK
+        int score
+        datetime completedAt
+        // Reserved for post-MVP verification/Interview Mode; unused in MVP.
+    }
+
+    READINESS_SNAPSHOT {
+        string id PK
+        string targetId FK
+        int jobMatch
+        int skillCoverage
+        int evidenceStrength
+        int portfolioStrength
+        int productionReadiness
+        int overallReadiness
+        string trigger
+        datetime createdAt
+    }
+```
+
+---
+
+## 8. API Design
+
+All endpoints are under `/api` and require an authenticated session unless noted. All responses use `{ data }` on success and `{ error: { code, message } }` on failure.
+
+| Method | URL | Purpose | Auth | Request Body | Response | Possible Errors |
+|---|---|---|---|---|---|---|
+| POST | `/api/auth/sign-up` | Create account | Public | `{ email, password, name }` | `{ user }` | 400 validation, 409 duplicate email |
+| POST | `/api/auth/sign-in` | Log in | Public | `{ email, password }` | `{ session }` | 401 invalid credentials |
+| GET | `/api/auth/github` | Start GitHub OAuth link | Required | — | Redirect | 401 |
+| GET | `/api/auth/github/callback` | Complete GitHub OAuth | Required | OAuth code (query) | Redirect + linked account | 400 invalid state, 502 GitHub error |
+| DELETE | `/api/auth/github` | Disconnect GitHub | Required | — | `{ success: true }` | 401 |
+| POST | `/api/targets` | Create target job | Required | `{ title, company?, jobDescription, experienceLevel, deadline? }` | `{ target }` | 400 validation |
+| GET | `/api/targets` | List user's targets | Required | — | `{ targets: [] }` | 401 |
+| GET | `/api/targets/:id` | Get target detail (requirements, roadmap) | Required | — | `{ target, requirements, roadmap }` | 404, 403 not owner |
+| PATCH | `/api/targets/:id` | Update target | Required | Partial target fields | `{ target }` | 400, 404, 403 |
+| DELETE | `/api/targets/:id` | Soft-delete target | Required | — | `{ success: true }` | 404, 403 |
+| POST | `/api/targets/:id/analyze` | Trigger/re-trigger job description analysis | Required | — | `{ jobId }` (async job handle) | 400, 502 AI error |
+| GET | `/api/jobs/:jobId` | Poll async job status | Required | — | `{ status, result? }` | 404 |
+| POST | `/api/resume` | Upload resume PDF | Required | multipart file | `{ jobId }` (async) | 400 bad file, 413 too large |
+| GET | `/api/resume/extracted` | Get extracted (pending-confirmation) resume data | Required | — | `{ skills: [], projects: [] }` | 404 |
+| POST | `/api/resume/confirm` | Confirm/merge extracted resume data into profile | Required | `{ skillIds: [], projectIds: [] }` | `{ success: true }` | 400 |
+| GET | `/api/skills` | Search/list canonical skills | Required | Query: `?q=` | `{ skills: [] }` | — |
+| POST | `/api/user-skills` | Add/edit a manual skill | Required | `{ skillId, confidence }` | `{ userSkill }` | 400 |
+| GET | `/api/targets/:id/gap` | Get skill gap analysis for a target | Required | — | `{ skills: [{skillId, status, explanation}] }` | 404, 403 |
+| GET | `/api/skills/:id/evidence` | Get evidence items for a skill (current user) | Required | — | `{ evidence: [] }` | 404 |
+| POST | `/api/evidence` | Add manual evidence | Required | `{ skillId, sourceType, sourceUrl, description }` | `{ evidence }` | 400 |
+| GET | `/api/targets/:id/roadmap` | Get roadmap for a target | Required | — | `{ roadmap, items: [] }` | 404, 403 |
+| POST | `/api/targets/:id/roadmap/regenerate` | Force roadmap recalculation | Required | — | `{ jobId }` (async) | 400, 502 AI error |
+| PATCH | `/api/roadmap-items/:id` | Update roadmap item status | Required | `{ status }` | `{ roadmapItem }` | 400, 404, 403 |
+| GET | `/api/projects` | List user's projects (existing + recommended) | Required | — | `{ projects: [] }` | — |
+| GET | `/api/projects/:id` | Project detail | Required | — | `{ project, skills, tasks }` | 404, 403 |
+| POST | `/api/github/sync` | Trigger manual GitHub sync | Required | — | `{ jobId }` (async, rate-limited) | 429 too soon, 502 GitHub error |
+| GET | `/api/github/repositories` | List synced repositories | Required | — | `{ repositories: [] }` | — |
+| GET | `/api/targets/:id/scores` | Get readiness scores + breakdown for a target | Required | — | `{ jobMatch, skillCoverage, evidenceStrength, portfolioStrength, productionReadiness, readiness, breakdown }` | 404, 403 |
+| GET | `/api/targets/:id/next-best-action` | Get current Next Best Action | Required | — | `{ action, rationale }` | 404, 403 |
+| DELETE | `/api/account` | Delete account and all associated data | Required | `{ confirm: true }` | `{ success: true }` | 400 |
+
+---
+
+## 9. Authentication & Authorization
+
+- **Authentication:** Auth.js session (JWT-based session token in an HTTP-only, `Secure`, `SameSite=Lax` cookie). Credentials provider hashes passwords with bcrypt; GitHub provider used both for optional "Sign in with GitHub" and for the mandatory GitHub-linking flow used by the Evidence Engine.
+- **Authorization:** Every API route resolves `userId` from the session server-side (never trusts a client-supplied id). Repository-layer queries always filter by `userId` (row-level ownership check), so even a crafted request for another user's `targetId` returns 404/403 rather than leaking data.
+- **GitHub token handling:** Access tokens stored encrypted at rest (e.g., via application-level encryption using a server-held key, or the database provider's built-in encryption-at-rest, combined with field-level encryption for the token column). Tokens are never sent to the frontend.
+- **Scopes:** Request `public_repo` (or `repo:status`/read-only equivalents) by default; a separate, clearly-labeled consent step is required before requesting private repository scopes.
+
+---
+
+## 10. AI Architecture
+
+> **MVP scoring boundaries:** Evidence Level 0–5 is computed internally and stored for deterministic gap/scoring logic, but the detailed 0–5 scale does not need to be surfaced in the MVP UI. Portfolio Strength is a deterministic/basic signal score in MVP; the deeper Portfolio Quality Audit is post-MVP. Assessment records are reserved for post-MVP verification/Interview Mode and are unused in MVP.
+
+
+
+- **Model/provider:** Anthropic Claude API (or any OpenAI-compatible provider) — abstracted behind a single internal `AIProvider` interface (`extractJobRequirements`, `extractResumeProfile`, `generateRoadmap`, `generateProjectIdeas`, `critiqueResumeClaim`) so the concrete provider can be swapped without touching business logic.
+- **Prompt architecture:** Each AI capability has a **versioned prompt template** stored in code (not user-editable), paired with a **strict JSON output schema** (validated with Zod on receipt). Prompts instruct the model to only extract/infer from the given input and never invent skills, employers, or evidence not present in the source text.
+- **Context management:** Each AI call is stateless and single-purpose (no long conversational memory needed); all required context (job description text, resume text, current skill list) is passed explicitly in the prompt per call.
+- **Memory:** No persistent AI "memory" across sessions — SkillGap's own database is the source of truth for user state; the AI is used as a stateless extraction/generation tool, not an agent with memory. This is a deliberate simplicity/trust choice.
+- **Retrieval/RAG:** Not required for MVP — job descriptions and resumes are short enough to fit directly in a single prompt context window. (Flagged as a future enhancement if job description history/market-trend features are built post-MVP.)
+- **Token/cost considerations:** Cache AI results by content hash (e.g., hash of job description text) to avoid re-processing identical input; cap input length (truncate extremely long job descriptions/resumes with a user-facing notice); batch skill normalization where possible.
+- **Failure handling:** On malformed JSON or schema-validation failure, retry once with a stricter "return only valid JSON" instruction; on repeated failure, fall back to a deterministic template (e.g., keyword-based skill matching against the `Skill` table) and flag the result as "basic analysis — AI unavailable."
+- **Safety considerations:** Never send GitHub access tokens or full file contents beyond what's needed (e.g., README text, file listing) to the AI provider; strip any obviously sensitive resume fields (e.g., government ID numbers) before sending resume text to the LLM, if detected.
+
+---
+
+## 11. Data Flow
+
+### Sequence — Onboarding to Roadmap
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant FE as Frontend
+    participant API as API Routes
+    participant JOB as Job Runner
+    participant AI as AI Provider
+    participant GH as GitHub API
+    participant DB as PostgreSQL
+
+    User->>FE: Create target (title, job description)
+    FE->>API: POST /api/targets
+    API->>DB: Insert Target
+    API->>JOB: Enqueue analyze job
+    JOB->>AI: extractJobRequirements(jobDescription)
+    AI-->>JOB: Structured requirements JSON
+    JOB->>DB: Insert JobRequirement rows (normalized via Skill)
+    User->>FE: Upload resume
+    FE->>API: POST /api/resume
+    API->>JOB: Enqueue resume extraction job
+    JOB->>AI: extractResumeProfile(resumeText)
+    AI-->>JOB: Structured skills/projects JSON
+    JOB->>DB: Store pending extraction for user review
+    User->>FE: Confirm extracted skills
+    FE->>API: POST /api/resume/confirm
+    API->>DB: Upsert UserSkill, Project, Evidence(source=resume)
+    User->>FE: Connect GitHub
+    FE->>API: GET /api/auth/github (OAuth)
+    API->>GH: OAuth token exchange
+    API->>DB: Store encrypted token
+    API->>JOB: Enqueue GitHub sync job
+    JOB->>GH: List repositories + metadata
+    GH-->>JOB: Repo data
+    JOB->>DB: Store GitHubRepository + Evidence(source=github)
+    API->>DB: Run Skill Gap Engine (read requirements+userSkills+evidence)
+    API->>DB: Run Roadmap Engine, Scoring Service
+    API-->>FE: Dashboard data (scores, gaps, roadmap, next best action)
+    FE-->>User: Render dashboard
+```
+
+### Sequence — GitHub Evidence Update Loop
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant FE as Frontend
+    participant API as API Routes
+    participant JOB as Job Runner
+    participant GH as GitHub API
+    participant DB as PostgreSQL
+
+    User->>FE: Click "Sync GitHub now"
+    FE->>API: POST /api/github/sync
+    API->>API: Check rate limit / cooldown
+    API->>JOB: Enqueue sync job
+    JOB->>GH: Fetch repo list + file trees (cached w/ ETag)
+    GH-->>JOB: Updated metadata (Dockerfile, workflows, tests detected)
+    JOB->>DB: Upsert GitHubRepository, Evidence records
+    JOB->>DB: Recompute Skill Gap status for affected skills
+    JOB->>DB: Recompute Roadmap + Scores
+    FE->>API: Poll GET /api/jobs/:jobId
+    API-->>FE: status=complete
+    FE->>API: GET /api/targets/:id/scores
+    API-->>FE: Updated scores
+    FE-->>User: Dashboard shows updated Evidence Strength + "Recently Verified"
+```
+
+---
+
+## 12. Security Architecture
+
+- HTTPS everywhere (enforced at the hosting platform level).
+- Input validation (Zod) at every API boundary; output encoding on the frontend to prevent XSS from user-entered text (e.g., job descriptions, resume-derived text) rendered in the UI.
+- CSRF protection via Auth.js's built-in CSRF token handling for state-changing form submissions; OAuth `state` parameter validated on GitHub callback.
+- File upload validation: MIME type + magic-byte check (not just file extension), size limit, virus/malware scanning out of scope for MVP but flagged as a risk (see Architecture §18).
+- Secrets (AI API key, GitHub OAuth client secret, DB credentials, token-encryption key) stored only in environment variables / platform secret manager — never committed to source control.
+- Rate limiting on expensive endpoints (`/analyze`, `/resume`, `/github/sync`) per user, to control cost and prevent abuse.
+- Principle of least privilege for GitHub scopes; explicit, separate consent step for private repository access.
+
+---
+
+## 13. Performance & Scalability
+
+- **Current design target:** Hundreds to low thousands of users (student/hackathon → early-stage scale), not high-traffic production scale.
+- Long-running work (AI calls, GitHub sync) is offloaded to background jobs so API request latency stays low and predictable.
+- Database indexes on all frequent lookup paths (see §7) to keep dashboard aggregation queries fast as data grows.
+- Caching of GitHub API responses (ETag-based conditional requests) and AI extraction results (content-hash keyed) reduces redundant external calls.
+- **Scaling path if load grows:** (1) Move the DB-backed job queue to a dedicated queue (e.g., BullMQ + Redis) without changing the service-layer API; (2) introduce Redis for hot-path caching (readiness scores, dashboard aggregates); (3) split GitHub sync into a separately-scaled worker process if sync volume grows beyond what serverless functions handle well. None of these require re-architecting the core domain model.
+
+---
+
+## 14. Logging, Monitoring & Error Tracking
+
+- Structured JSON logs for: AI calls (capability, prompt version, latency, token usage if available, success/failure), GitHub sync jobs (repo count, duration, rate-limit status), and all API errors.
+- Frontend and backend error tracking via a free-tier error tracking service (e.g., Sentry), capturing unhandled exceptions with user id (pseudonymous) and request context, excluding sensitive payload contents (resume text, job descriptions) from error reports.
+- Background job status table (`jobId, type, status, startedAt, completedAt, error`) doubles as both a monitoring surface and the polling mechanism for the frontend.
+- Basic uptime/latency monitoring via the hosting platform's built-in analytics for MVP; a dedicated APM tool is a post-MVP enhancement.
+
+---
+
+## 15. Deployment Architecture
+
+- **Development:** Local Next.js dev server + local or cloud dev Postgres instance (e.g., a free Neon branch); `.env.local` for secrets; Prisma migrations run locally against the dev DB.
+- **Staging:** A separate Vercel preview environment (automatic per-PR previews) pointed at a separate Neon/Supabase branch database, used for manual QA before merging to `main`.
+- **Production:** Vercel production deployment triggered on merge to `main`; production Postgres instance (Neon/Supabase); environment variables/secrets configured in the Vercel dashboard (never in source control).
+- Database migrations run as an explicit deployment step (`prisma migrate deploy`) before/at the start of the production deploy, not automatically on every cold start.
+
+```mermaid
+flowchart LR
+    DEV[Local Dev] -->|git push| GH[GitHub Repo]
+    GH -->|PR| PREVIEW[Vercel Preview + Staging DB]
+    GH -->|merge to main| PROD[Vercel Production]
+    PROD --> PRODDB[(Production Postgres)]
+    PREVIEW --> STAGEDB[(Staging Postgres)]
+```
+
+---
+
+## 16. Folder Structure
+
+```
+skillgap/
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
+├── src/
+│   ├── app/                        # Next.js App Router pages
+│   │   ├── (auth)/sign-in/
+│   │   ├── (auth)/sign-up/
+│   │   ├── onboarding/
+│   │   ├── dashboard/
+│   │   ├── targets/
+│   │   │   ├── [id]/
+│   │   │   └── page.tsx
+│   │   ├── skills/[id]/
+│   │   ├── projects/[id]/
+│   │   ├── settings/
+│   │   └── api/
+│   │       ├── auth/
+│   │       ├── targets/
+│   │       ├── resume/
+│   │       ├── skills/
+│   │       ├── user-skills/
+│   │       ├── evidence/
+│   │       ├── github/
+│   │       ├── jobs/
+│   │       └── account/
+│   ├── components/
+│   │   ├── ui/                     # shadcn/ui primitives
+│   │   ├── dashboard/
+│   │   ├── roadmap/
+│   │   └── skills/
+│   ├── services/
+│   │   ├── authService.ts
+│   │   ├── targetService.ts
+│   │   ├── resumeService.ts
+│   │   ├── skillGapEngine.ts
+│   │   ├── evidenceEngine.ts
+│   │   ├── roadmapEngine.ts
+│   │   ├── githubSyncService.ts
+│   │   └── scoringService.ts
+│   ├── repositories/
+│   │   ├── userRepository.ts
+│   │   ├── targetRepository.ts
+│   │   ├── skillRepository.ts
+│   │   ├── evidenceRepository.ts
+│   │   ├── roadmapRepository.ts
+│   │   └── githubRepository.ts
+│   ├── ai/
+│   │   ├── provider.ts              # AIProvider interface + concrete adapter
+│   │   ├── prompts/
+│   │   └── schemas/                 # Zod schemas for AI outputs
+│   ├── jobs/
+│   │   ├── jobRunner.ts
+│   │   └── handlers/
+│   ├── lib/
+│   │   ├── auth.ts
+│   │   ├── db.ts                    # Prisma client singleton
+│   │   ├── validation/              # shared Zod schemas
+│   │   └── skillNormalization.ts
+│   └── styles/
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/
+├── .env.example
+├── package.json
+└── README.md
+```
+
+---
+
+## 17. Architectural Decisions
+
+| Decision | Rationale |
+|---|---|
+| Modular monolith over microservices | Small team, tightly related domain entities, faster to build/deploy/debug. |
+| Deterministic code for gap-status and scoring, AI only for extraction/generation | Reduces hallucination risk and keeps scores explainable/reproducible (source spec §27, §30). |
+| Background job table instead of Redis queue for MVP | Avoids an extra infra dependency; clear, low-risk upgrade path if needed. |
+| AI provider behind an internal interface | Keeps the system provider-agnostic and testable (can mock the interface in tests). |
+| Resume/GitHub extraction requires user confirmation before being saved as fact | Prevents hallucinated or misdetected data from silently corrupting the user's profile and trust in the product. |
+| Row-level ownership checks in the repository layer, not just at the route layer | Defense in depth against IDOR-style access bugs. |
+| GitHub evidence explicitly labeled "detected, not verified mastery" | Matches source spec's explicit requirement that GitHub detection is evidence, not proof (source spec §11). |
+
+---
+
+## 18. Technical Risks and Trade-offs
+
+- **Trade-off — Modular monolith:** Simpler now, but background-heavy workloads (AI, GitHub sync) share compute with the web app on serverless platforms; if sync volume grows significantly, cold-start/timeout limits on serverless functions may require moving sync to a dedicated long-running worker (mitigation path documented in §13).
+- **Trade-off — No RAG/vector store for MVP:** Simpler, but limits future features like "search across all my past job description analyses" without a later retrieval layer addition.
+- **Risk — AI provider outage or rate limiting:** Mitigated by fallback deterministic extraction (keyword/skill-table matching) so core flows degrade rather than fully break.
+- **Risk — GitHub API rate limits at scale:** Mitigated by caching, ETag conditional requests, and user-level sync cooldowns; a true production scale-up would need a dedicated sync worker with its own rate-limit budget management.
+- **Risk — File upload attack surface (malicious PDFs):** MVP relies on library-level PDF parsing safety and file-type/size validation; a production hardening pass would add sandboxed parsing or a managed document-processing service.
+- **Trade-off — DB-stored/short-lived-URL file storage vs. dedicated object storage:** Simpler for MVP, but object storage (e.g., Vercel Blob/S3-compatible) should be adopted early if resume volume or file size grows, since large binary blobs in the primary relational DB hurt backup/restore performance over time.
